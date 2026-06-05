@@ -455,11 +455,23 @@ jobs:
 
       - name: Verify certificate
         if: contains(inputs.platform, 'macos') && inputs.sign-binaries
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application")
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
           echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
           echo "Certificate imported: $CERT_ID"
+          # Export notarization creds to the job env ONLY for signed builds, so the
+          # tauri build step doesn't see empty APPLE_* vars on unsigned builds (an
+          # empty APPLE_TEAM_ID triggers a notarization attempt that fails).
+          echo "APPLE_ID=$APPLE_ID" >> $GITHUB_ENV
+          echo "APPLE_ID_PASSWORD=$APPLE_ID_PASSWORD" >> $GITHUB_ENV
+          echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> $GITHUB_ENV
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> $GITHUB_ENV
 
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
@@ -571,16 +583,13 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_ID: ${{ inputs.sign-binaries && secrets.APPLE_ID || '' }}
-          APPLE_ID_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_ID_PASSWORD || '' }}
-          APPLE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ inputs.sign-binaries && secrets.APPLE_TEAM_ID || '' }}
-          # APPLE_CERTIFICATE/_PASSWORD intentionally NOT passed here: when empty
-          # (unsigned builds) the bundler still treats the present env var as a cert
-          # to `security import` and fails. The "Import Apple certificate" step above
-          # loads the cert into the keychain for signed builds; APPLE_SIGNING_IDENTITY
-          # below selects it. Unsigned builds use "-" (ad-hoc) — an empty value would
-          # be passed to `codesign -s` and fail looking it up in the keychain.
+          # Apple notarization creds (APPLE_ID/_PASSWORD/APPLE_PASSWORD/APPLE_TEAM_ID)
+          # and APPLE_CERTIFICATE are intentionally NOT set here. Passing them as
+          # empty strings on unsigned builds makes the bundler attempt cert import /
+          # notarization and fail (e.g. "Team ID must be at least 3 characters"). For
+          # signed builds the "Verify certificate" step exports them to $GITHUB_ENV,
+          # so the bundler picks them up from the job env. Unsigned builds get none →
+          # ad-hoc sign via APPLE_SIGNING_IDENTITY "-" and skip notarization.
           APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '-' }}
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
