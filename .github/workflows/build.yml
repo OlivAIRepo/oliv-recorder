@@ -579,8 +579,9 @@ jobs:
           # (unsigned builds) the bundler still treats the present env var as a cert
           # to `security import` and fails. The "Import Apple certificate" step above
           # loads the cert into the keychain for signed builds; APPLE_SIGNING_IDENTITY
-          # below selects it. Unsigned builds fall back to tauri.conf signingIdentity "-".
-          APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '' }}
+          # below selects it. Unsigned builds use "-" (ad-hoc) — an empty value would
+          # be passed to `codesign -s` and fail looking it up in the keychain.
+          APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '-' }}
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
