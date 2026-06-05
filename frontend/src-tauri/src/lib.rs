@@ -494,6 +494,24 @@ pub fn run() {
                 log::warn!("Failed to resolve resource directory for templates");
             }
 
+            // Menubar app: no Dock icon on macOS — the app lives in the menubar tray.
+            #[cfg(target_os = "macos")]
+            {
+                let _ = _app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+
+            // Clicking the window's close button hides it to the menubar instead of
+            // quitting; the app keeps running in the tray. Quit is via the tray menu.
+            if let Some(main_window) = _app.get_webview_window("main") {
+                let hide_target = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hide_target.hide();
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

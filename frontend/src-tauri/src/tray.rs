@@ -1,7 +1,7 @@
 use tauri::{
     Emitter,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
 
@@ -23,9 +23,21 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("Meetily")
+        // Left-click toggles the window (menubar popover feel); right-click shows the menu.
+        .show_menu_on_left_click(false)
+        .tooltip("Oliv Recorder")
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_main_window(tray.app_handle());
+            }
+        })
         .build(app)?;
 
     // Update tray menu with actual recording state after creation
@@ -331,7 +343,7 @@ fn build_menu<R: Runtime>(
         match state {
             RecordingState::Stopped => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("toggle_recording", "Start Transcription").build(app)?);
             }
             RecordingState::Starting => {
                 builder = builder.item(
@@ -399,5 +411,20 @@ fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.eval("window.focus()");
     } else {
         log::warn!("Could not find main window");
+    }
+}
+
+/// Show the window if hidden, hide it if visible — the menubar left-click toggle.
+fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    } else {
+        log::warn!("Could not find main window to toggle");
     }
 }
