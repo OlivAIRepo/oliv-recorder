@@ -697,5 +697,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cargo-lock-${{ inputs.target }}
-          path: frontend/src-tauri/Cargo.lock
+          path: |
+            frontend/Cargo.lock
+            frontend/src-tauri/Cargo.lock
+            Cargo.lock
+          if-no-files-found: warn
           retention-days: 7
