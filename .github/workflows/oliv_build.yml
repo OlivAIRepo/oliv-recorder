@@ -1,0 +1,33 @@
+name: "Oliv Build (mac + windows, unsigned)"
+
+# Builds the Oliv Recorder fork from source for macOS + Windows via the proven
+# reusable build.yml. Unsigned (sign-binaries: false) so no Apple/DigiCert
+# secrets are needed — this validates that our fork compiles and packages.
+# Signed builds come later once cert secrets are added.
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"        # Apple Silicon (M1+)
+            args: "--target aarch64-apple-darwin"
+            target: "aarch64-apple-darwin"
+          - platform: "windows-latest"
+            args: ""
+            target: "x86_64-pc-windows-msvc"
+
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: ${{ matrix.platform }}
+      target: ${{ matrix.target }}
+      build-args: ${{ matrix.args }}
+      sign-binaries: false
+      asset-prefix: "oliv-recorder"
+      upload-artifacts: true
+    secrets: inherit

@@ -678,3 +678,11 @@ jobs:
             target/${{ steps.build-profile.outputs.profile }}/bundle/nsis/*.exe
             target/${{ steps.build-profile.outputs.profile }}/bundle/nsis/*.exe.sig
           retention-days: 30
+
+      - name: Upload resolved Cargo.lock
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock-${{ inputs.target }}
+          path: frontend/src-tauri/Cargo.lock
+          retention-days: 7
