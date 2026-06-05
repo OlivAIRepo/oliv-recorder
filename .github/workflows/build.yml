@@ -575,8 +575,11 @@ jobs:
           APPLE_ID_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_ID_PASSWORD || '' }}
           APPLE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ inputs.sign-binaries && secrets.APPLE_TEAM_ID || '' }}
-          APPLE_CERTIFICATE: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          # APPLE_CERTIFICATE/_PASSWORD intentionally NOT passed here: when empty
+          # (unsigned builds) the bundler still treats the present env var as a cert
+          # to `security import` and fails. The "Import Apple certificate" step above
+          # loads the cert into the keychain for signed builds; APPLE_SIGNING_IDENTITY
+          # below selects it. Unsigned builds fall back to tauri.conf signingIdentity "-".
           APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '' }}
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
