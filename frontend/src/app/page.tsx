@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import Image from 'next/image';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -11,7 +12,6 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { StatusOverlays } from '@/app/_components/StatusOverlays';
 import Analytics from '@/lib/analytics';
 import { SettingsModals } from './_components/SettingsModal';
-import { TranscriptPanel } from './_components/TranscriptPanel';
 import { useModalState } from '@/hooks/useModalState';
 import { useRecordingStateSync } from '@/hooks/useRecordingStateSync';
 import { useRecordingStart } from '@/hooks/useRecordingStart';
@@ -20,95 +20,77 @@ import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
 import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
-import { useRouter } from 'next/navigation';
+
+// Persisted per-session so the audio pipeline (sensitive => upload mic only) can read it.
+const SENSITIVE_KEY = 'oliv_sensitive_meeting';
 
 export default function Home() {
-  // Local page state (not moved to contexts)
   const [isRecording, setIsRecordingState] = useState(false);
-  const [barHeights, setBarHeights] = useState(['58%', '76%', '58%']);
+  const [barHeights] = useState(['58%', '76%', '58%']);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [sensitive, setSensitive] = useState(false);
 
-  // Use contexts for state management
-  const { meetingTitle } = useTranscripts();
+  const { meetingTitle, setMeetingTitle } = useTranscripts();
   const { transcriptModelConfig, selectedDevices } = useConfig();
   const recordingState = useRecordingState();
+  const { status, isProcessing } = recordingState;
 
-  // Extract status from global state
-  const { status, isStopping, isProcessing, isSaving } = recordingState;
-
-  // Hooks
   const { hasMicrophone } = usePermissionCheck();
   const { setIsMeetingActive, isCollapsed: sidebarCollapsed, refetchMeetings } = useSidebar();
   const { modals, messages, showModal, hideModal } = useModalState(transcriptModelConfig);
-  const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(isRecording, setIsRecordingState, setIsMeetingActive);
+  const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(
+    isRecording, setIsRecordingState, setIsMeetingActive
+  );
   const { handleRecordingStart } = useRecordingStart(isRecording, setIsRecordingState, showModal);
-
-  // Get handleRecordingStop function and setIsStopping (state comes from global context)
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
-    setIsRecordingState,
-    setIsRecordingDisabled
+    setIsRecordingState, setIsRecordingDisabled
   );
 
-  // Recovery hook
   const {
     recoverableMeetings,
-    isLoading: isLoadingRecovery,
-    isRecovering,
     checkForRecoverableTranscripts,
     recoverMeeting,
     loadMeetingTranscripts,
-    deleteRecoverableMeeting
+    deleteRecoverableMeeting,
   } = useTranscriptRecovery();
 
-  const router = useRouter();
-
   useEffect(() => {
-    // Track page view
     Analytics.trackPageView('home');
+    try {
+      setSensitive(sessionStorage.getItem(SENSITIVE_KEY) === 'true');
+    } catch { /* sessionStorage unavailable */ }
   }, []);
 
-  // Startup recovery check
+  const toggleSensitive = (val: boolean) => {
+    setSensitive(val);
+    try {
+      sessionStorage.setItem(SENSITIVE_KEY, val ? 'true' : 'false');
+    } catch { /* sessionStorage unavailable */ }
+  };
+
+  // Startup: prune old local meetings + offer crash recovery.
   useEffect(() => {
     const performStartupChecks = async () => {
       try {
-        // Skip recovery check if currently recording or processing stop
-        // This prevents the recovery dialog from showing when:
-        if (recordingState.isRecording ||
+        if (
+          recordingState.isRecording ||
           status === RecordingStatus.STOPPING ||
           status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
-          status === RecordingStatus.SAVING) {
-          console.log('Skipping recovery check - recording in progress or processing');
+          status === RecordingStatus.SAVING
+        ) {
           return;
         }
-
-        // 1. Clean up old meetings (7+ days)
-        try {
-          await indexedDBService.deleteOldMeetings(7);
-        } catch (error) {
-          console.warn('⚠️ Failed to clean up old meetings:', error);
-        }
-
-        // 2. Clean up saved meetings (24+ hours after save)
-        try {
-          await indexedDBService.deleteSavedMeetings(24);
-        } catch (error) {
-          console.warn('⚠️ Failed to clean up saved meetings:', error);
-        }
-
-        // 3. Always check for recoverable meetings on startup
-        // Don't skip based on sessionStorage - we need to check every time
+        try { await indexedDBService.deleteOldMeetings(7); } catch (e) { console.warn(e); }
+        try { await indexedDBService.deleteSavedMeetings(24); } catch (e) { console.warn(e); }
         await checkForRecoverableTranscripts();
       } catch (error) {
         console.error('Failed to perform startup checks:', error);
       }
     };
-
     performStartupChecks();
   }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
 
-  // Watch for recoverable meetings changes and show dialog once per session
   useEffect(() => {
-    // Only show dialog if we have meetings and haven't shown it yet this session
     if (recoverableMeetings.length > 0) {
       const shownThisSession = sessionStorage.getItem('recovery_dialog_shown');
       if (!shownThisSession) {
@@ -118,38 +100,14 @@ export default function Home() {
     }
   }, [recoverableMeetings]);
 
-  // Handle recovery with toast notifications and navigation
   const handleRecovery = async (meetingId: string) => {
     try {
       const result = await recoverMeeting(meetingId);
-
       if (result.success) {
-        toast.success('Meeting recovered successfully!', {
-          description: result.audioRecoveryStatus?.status === 'success'
-            ? 'Transcripts and audio recovered'
-            : 'Transcripts recovered (no audio available)',
-          action: result.meetingId ? {
-            label: 'View Meeting',
-            onClick: () => {
-              router.push(`/meeting-details?id=${result.meetingId}`);
-            }
-          } : undefined,
-          duration: 10000,
-        });
-
-        // Refresh sidebar to show the newly recovered meeting
+        toast.success('Meeting recovered.', { duration: 6000 });
         await refetchMeetings();
-
-        // If no more recoverable meetings, clear session flag so dialog can show again
         if (recoverableMeetings.length === 0) {
           sessionStorage.removeItem('recovery_dialog_shown');
-        }
-
-        // Auto-navigate after a short delay
-        if (result.meetingId) {
-          setTimeout(() => {
-            router.push(`/meeting-details?id=${result.meetingId}`);
-          }, 2000);
         }
       }
     } catch (error) {
@@ -160,34 +118,19 @@ export default function Home() {
     }
   };
 
-  // Handle dialog close - clear session flag if no meetings left
   const handleDialogClose = () => {
     setShowRecoveryDialog(false);
-    // If user closes dialog and there are no more meetings, clear the flag
-    // This allows the dialog to show again next session if new meetings appear
     if (recoverableMeetings.length === 0) {
       sessionStorage.removeItem('recovery_dialog_shown');
     }
   };
 
-  useEffect(() => {
-    if (recordingState.isRecording) {
-      const interval = setInterval(() => {
-        setBarHeights(prev => {
-          const newHeights = [...prev];
-          newHeights[0] = Math.random() * 20 + 10 + 'px';
-          newHeights[1] = Math.random() * 20 + 10 + 'px';
-          newHeights[2] = Math.random() * 20 + 10 + 'px';
-          return newHeights;
-        });
-      }, 300);
-
-      return () => clearInterval(interval);
-    }
-  }, [recordingState.isRecording]);
-
-  // Computed values using global status
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
+  const nameValue = meetingTitle === '+ New Call' ? '' : meetingTitle;
+  const controlsVisible =
+    (hasMicrophone || isRecording) &&
+    status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
+    status !== RecordingStatus.SAVING;
 
   return (
     <motion.div
@@ -196,14 +139,8 @@ export default function Home() {
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen bg-gray-50"
     >
-      {/* All Modals supported*/}
-      <SettingsModals
-        modals={modals}
-        messages={messages}
-        onClose={hideModal}
-      />
+      <SettingsModals modals={modals} messages={messages} onClose={hideModal} />
 
-      {/* Recovery Dialog */}
       <TranscriptRecovery
         isOpen={showRecoveryDialog}
         onClose={handleDialogClose}
@@ -212,54 +149,58 @@ export default function Home() {
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
       />
-      <div className="flex flex-1 overflow-hidden">
-        <TranscriptPanel
-          isProcessingStop={isProcessingStop}
-          isStopping={isStopping}
-          showModal={showModal}
-        />
 
-        {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
-        {(hasMicrophone || isRecording) &&
-          status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
-          status !== RecordingStatus.SAVING && (
-            <div className="fixed bottom-12 left-0 right-0 z-10">
-              <div
-                className="flex justify-center pl-8 transition-[margin] duration-300"
-                style={{
-                  marginLeft: sidebarCollapsed ? '4rem' : '16rem'
-                }}
-              >
-                <div className="w-2/3 max-w-[750px] flex justify-center">
-                  <div className="bg-white rounded-full shadow-lg flex items-center">
-                    <RecordingControls
-                      isRecording={recordingState.isRecording}
-                      onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
-                      onRecordingStart={handleRecordingStart}
-                      onTranscriptReceived={() => { }} // Not actually used by RecordingControls
-                      onStopInitiated={() => setIsStopping(true)}
-                      barHeights={barHeights}
-                      onTranscriptionError={(message) => {
-                        showModal('errorAlert', message);
-                      }}
-                      isRecordingDisabled={isRecordingDisabled}
-                      isParentProcessing={isProcessingStop}
-                      selectedDevices={selectedDevices}
-                      meetingName={meetingTitle}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+      <div className="flex-1 flex flex-col items-center justify-center px-8">
+        <div className="w-full max-w-md flex flex-col items-center gap-6">
+          <div className="flex flex-col items-center gap-3">
+            <Image src="/logo.png" alt="Oliv Recorder" width={56} height={56} priority />
+            <h1 className="text-xl font-semibold text-gray-900">Oliv Recorder</h1>
+          </div>
+
+          <input
+            type="text"
+            value={nameValue}
+            onChange={(e) => setMeetingTitle(e.target.value || '+ New Call')}
+            placeholder="Meeting name (optional)"
+            disabled={recordingState.isRecording || isProcessingStop}
+            className="w-full text-center rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+          />
+
+          {controlsVisible && (
+            <RecordingControls
+              isRecording={recordingState.isRecording}
+              onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
+              onRecordingStart={handleRecordingStart}
+              onTranscriptReceived={() => { }}
+              onStopInitiated={() => setIsStopping(true)}
+              barHeights={barHeights}
+              onTranscriptionError={(message) => showModal('errorAlert', message)}
+              isRecordingDisabled={isRecordingDisabled}
+              isParentProcessing={isProcessingStop}
+              selectedDevices={selectedDevices}
+              meetingName={meetingTitle}
+            />
           )}
 
-        {/* Status Overlays - Processing and Saving */}
-        <StatusOverlays
-          isProcessing={status === RecordingStatus.PROCESSING_TRANSCRIPTS && !recordingState.isRecording}
-          isSaving={status === RecordingStatus.SAVING}
-          sidebarCollapsed={sidebarCollapsed}
-        />
+          <label className="flex items-center gap-2 text-sm text-gray-600 select-none">
+            <input
+              type="checkbox"
+              checked={sensitive}
+              onChange={(e) => toggleSensitive(e.target.checked)}
+              disabled={recordingState.isRecording || isProcessingStop}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            Sensitive meeting
+            <span className="text-gray-400">— only your mic is uploaded</span>
+          </label>
+        </div>
       </div>
+
+      <StatusOverlays
+        isProcessing={status === RecordingStatus.PROCESSING_TRANSCRIPTS && !recordingState.isRecording}
+        isSaving={status === RecordingStatus.SAVING}
+        sidebarCollapsed={sidebarCollapsed}
+      />
     </motion.div>
   );
 }
