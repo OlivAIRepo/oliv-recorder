@@ -78,6 +78,10 @@ async fn post_json(token: &str, path: &str, body: serde_json::Value) -> Result<(
     let url = format!("{}/api/recorder/{}", backend_url(), path);
     let resp = reqwest::Client::new()
         .post(&url)
+        // Send as a cookie: the prod gateway strips underscore headers like
+        // `ic_token`, so the header alone never reaches the middleware. The
+        // middleware reads the token from either the cookie or the header.
+        .header("Cookie", format!("ic_token={token}"))
         .header("ic_token", token)
         .json(&body)
         .send()
@@ -232,6 +236,7 @@ async fn upload_channel(token: &str, session_id: &str, channel: &str, path: &Pat
     let url = format!("{}/api/recorder/audio", backend_url());
     let resp = reqwest::Client::new()
         .post(&url)
+        .header("Cookie", format!("ic_token={token}"))
         .header("ic_token", token)
         .multipart(form)
         .send()
