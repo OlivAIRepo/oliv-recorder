@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tauri::{AppHandle, Listener, Runtime};
 
-const DEFAULT_BACKEND_URL: &str = "https://br-mw.oliv.ai";
+const DEFAULT_BACKEND_URL: &str = "https://my.oliv.ai";
 const PROVIDER_LOCAL: &str = "local";
 
 // "Sensitive meeting" toggle (Home screen). When set, only the cleaned mic
