@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod auth;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -396,6 +397,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_deep_link::init())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -512,9 +514,28 @@ pub fn run() {
                 });
             }
 
+            // Oliv login deep link: olivrecorder://auth-callback?ic_token=...
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let auth_app = _app.handle().clone();
+                _app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        crate::auth::handle_auth_callback(&auth_app, url.as_str());
+                    }
+                });
+                // Register the scheme at runtime for Windows/Linux dev installs;
+                // macOS picks it up from Info.plist CFBundleURLTypes.
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                if let Err(e) = _app.deep_link().register_all() {
+                    log::warn!("deep-link: register_all failed: {}", e);
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            auth::get_oliv_account,
+            auth::oliv_logout,
             start_recording,
             stop_recording,
             is_recording,

@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, LogIn, CheckCircle2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
-// my.oliv.ai login, returning the ic_token to the app via the olivrecorder:// deep link.
-// The deep-link callback handling + keychain storage are wired in the login phase.
+// my.oliv.ai login, returning the ic_token to the app via the olivrecorder:// deep
+// link. The deep-link callback is handled in Rust (auth.rs) and persisted to the
+// OS keychain; it then emits `oliv-auth-changed`, which we listen for below.
 const OLIV_LOGIN_URL =
   'https://my.oliv.ai/login?final-page=olivrecorder://auth-callback';
 
@@ -14,18 +16,35 @@ export default function SettingsPage() {
   const router = useRouter();
   const [account, setAccount] = useState<{ email: string } | null>(null);
 
-  // Reflect current auth state (populated once login is wired up).
-  useEffect(() => {
+  const refreshAccount = useCallback(() => {
     invoke<{ email: string } | null>('get_oliv_account')
       .then((acct) => setAccount(acct ?? null))
       .catch(() => setAccount(null));
   }, []);
+
+  useEffect(() => {
+    refreshAccount();
+    const unlistenPromise = listen('oliv-auth-changed', () => refreshAccount());
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [refreshAccount]);
 
   const handleLogin = async () => {
     try {
       await invoke('open_external_url', { url: OLIV_LOGIN_URL });
     } catch (error) {
       console.error('Failed to open Oliv login:', error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await invoke('oliv_logout');
+    } catch (error) {
+      console.error('Failed to log out:', error);
+    } finally {
+      refreshAccount();
     }
   };
 
@@ -51,11 +70,19 @@ export default function SettingsPage() {
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900">Account</h2>
             {account ? (
-              <div className="mt-4 flex items-center gap-3 text-gray-700">
-                <CheckCircle2 className="w-5 h-5 text-green-600" />
-                <span>
-                  Signed in as <span className="font-medium">{account.email}</span>
-                </span>
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 text-gray-700">
+                  <CheckCircle2 className="w-5 h-5 text-green-600" />
+                  <span>
+                    Signed in as <span className="font-medium">{account.email}</span>
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="text-sm text-gray-500 hover:text-gray-800 transition-colors"
+                >
+                  Log out
+                </button>
               </div>
             ) : (
               <>
