@@ -39,6 +39,11 @@ struct SessionState {
     // Token resolved once at session start and reused for segments/end, so the
     // keychain is read at most once per recording (not per POST).
     token: String,
+    // The server-side session row is created asynchronously by start_session. Until
+    // it confirms, segments are buffered (not POSTed) so they can't race ahead of
+    // the row's creation (which can be slow on a cold middleware cache).
+    ready: bool,
+    buffer: Vec<serde_json::Value>,
 }
 
 static CURRENT: Mutex<Option<SessionState>> = Mutex::new(None);
@@ -100,6 +105,8 @@ async fn start_session(meeting_name: Option<String>) {
             session_id: session_id.clone(),
             segment_count: 0,
             token: token.clone(),
+            ready: false,
+            buffer: Vec::new(),
         });
     }
     let body = json!({
@@ -109,24 +116,33 @@ async fn start_session(meeting_name: Option<String>) {
         "started_at": now_iso(),
     });
     if let Err(e) = post_json(&token, "session", body).await {
-        log::warn!("ingest: {e}");
-    } else {
-        log::info!("ingest: started session {session_id}");
+        // Leave ready=false; segments keep buffering. end_session will retry the flush.
+        log::warn!("ingest: session start failed: {e}");
+        return;
     }
-}
-
-async fn push_segment(ev: TranscriptEvent) {
-    let (session_id, token) = {
+    // Session row exists server-side now: mark ready and flush anything buffered
+    // while it was being created (avoids segments racing ahead of the row).
+    let buffered = {
         let mut cur = CURRENT.lock().unwrap();
         match cur.as_mut() {
             Some(s) => {
-                s.segment_count += 1;
-                (s.session_id.clone(), s.token.clone())
+                s.ready = true;
+                std::mem::take(&mut s.buffer)
             }
-            None => return, // no active ingest session
+            None => Vec::new(),
         }
     };
-    let segment = json!({
+    log::info!("ingest: started session {session_id}");
+    if !buffered.is_empty() {
+        let body = json!({ "session_id": session_id, "segments": buffered });
+        if let Err(e) = post_json(&token, "segments", body).await {
+            log::warn!("ingest: flush buffered segments failed: {e}");
+        }
+    }
+}
+
+fn segment_json(ev: &TranscriptEvent) -> serde_json::Value {
+    json!({
         "seq": ev.sequence_id,
         "channel": "mixed",   // live stream is the mixed transcript; per-channel comes from S3 audio
         "speaker": "Speaker",
@@ -135,21 +151,60 @@ async fn push_segment(ev: TranscriptEvent) {
         "end_ms": (ev.audio_end_time * 1000.0) as i64,
         "is_final": true,
         "confidence": ev.confidence,
-    });
-    let body = json!({ "session_id": session_id, "segments": [segment] });
-    if let Err(e) = post_json(&token, "segments", body).await {
-        log::warn!("ingest: {e}");
+    })
+}
+
+async fn push_segment(ev: TranscriptEvent) {
+    // Either POST now (session ready) or buffer (still being created). Never POST
+    // before the session row exists, or it 500s with "no Session".
+    let to_post = {
+        let mut cur = CURRENT.lock().unwrap();
+        match cur.as_mut() {
+            Some(s) => {
+                s.segment_count += 1;
+                let seg = segment_json(&ev);
+                if s.ready {
+                    Some((s.session_id.clone(), s.token.clone(), seg))
+                } else {
+                    s.buffer.push(seg);
+                    None
+                }
+            }
+            None => return, // no active ingest session
+        }
+    };
+    if let Some((session_id, token, seg)) = to_post {
+        let body = json!({ "session_id": session_id, "segments": [seg] });
+        if let Err(e) = post_json(&token, "segments", body).await {
+            log::warn!("ingest: {e}");
+        }
     }
 }
 
 async fn end_session() {
-    let (session_id, count, token) = {
+    // Wait for the session to be confirmed (cold-start can delay creation), so the
+    // final segments + end land after the row exists. Bounded so we never hang.
+    for _ in 0..120 {
+        let ready = CURRENT.lock().unwrap().as_ref().map(|s| s.ready).unwrap_or(true);
+        if ready {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    let (session_id, count, token, buffer) = {
         let mut cur = CURRENT.lock().unwrap();
         match cur.take() {
-            Some(s) => (s.session_id, s.segment_count, s.token),
+            Some(s) => (s.session_id, s.segment_count, s.token, s.buffer),
             None => return,
         }
     };
+    // Flush any still-buffered segments before ending.
+    if !buffer.is_empty() {
+        let body = json!({ "session_id": session_id, "segments": buffer });
+        if let Err(e) = post_json(&token, "segments", body).await {
+            log::warn!("ingest: end flush failed: {e}");
+        }
+    }
     let body = json!({
         "session_id": session_id,
         "ended_at": now_iso(),
