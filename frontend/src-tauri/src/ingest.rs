@@ -11,6 +11,8 @@
 //! Backend URL: `OLIV_RECORDER_BACKEND` env override, else the prod default.
 //! Endpoints (mounted under /api): session | segments | session/end | audio.
 
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::Deserialize;
@@ -19,6 +21,17 @@ use tauri::{AppHandle, Listener, Runtime};
 
 const DEFAULT_BACKEND_URL: &str = "https://br-mw.oliv.ai";
 const PROVIDER_LOCAL: &str = "local";
+
+// "Sensitive meeting" toggle (Home screen). When set, only the cleaned mic
+// channel is uploaded; otherwise both mic + system are uploaded. Never raw mic.
+static SENSITIVE: AtomicBool = AtomicBool::new(false);
+
+/// Set by the Home "Sensitive meeting" toggle.
+#[tauri::command]
+pub fn oliv_set_sensitive(sensitive: bool) {
+    SENSITIVE.store(sensitive, Ordering::SeqCst);
+    log::info!("ingest: sensitive meeting = {sensitive}");
+}
 
 struct SessionState {
     session_id: String,
@@ -149,6 +162,61 @@ async fn end_session() {
     }
 }
 
+async fn upload_channel(token: &str, session_id: &str, channel: &str, path: &Path) -> Result<(), String> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(format!("{channel}.wav"))
+        .mime_str("audio/wav")
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("session_id", session_id.to_string())
+        .text("channel", channel.to_string())
+        .part("file", part);
+    let url = format!("{}/api/recorder/audio", backend_url());
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("ic_token", token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("audio upload ({channel}) failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("audio upload ({channel}) -> HTTP {}", resp.status()));
+    }
+    Ok(())
+}
+
+/// Upload the cleaned channel WAV(s) from the recording folder per the sensitive
+/// flag: sensitive => mic only; otherwise mic + system. Never the raw mic.
+async fn upload_audio(token: &str, session_id: &str, folder: &str) {
+    let sensitive = SENSITIVE.load(Ordering::SeqCst);
+    let dir = Path::new(folder);
+
+    let mic = dir.join(crate::audio::channel_writer::MIC_WAV);
+    if mic.exists() {
+        match upload_channel(token, session_id, "mic", &mic).await {
+            Ok(()) => log::info!("ingest: uploaded mic channel"),
+            Err(e) => log::warn!("ingest: {e}"),
+        }
+    } else {
+        log::warn!("ingest: {} not found — skipping mic upload", mic.display());
+    }
+
+    if sensitive {
+        log::info!("ingest: sensitive meeting — system channel withheld");
+        return;
+    }
+    let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
+    if sys.exists() {
+        match upload_channel(token, session_id, "system", &sys).await {
+            Ok(()) => log::info!("ingest: uploaded system channel"),
+            Err(e) => log::warn!("ingest: {e}"),
+        }
+    }
+}
+
 /// Register lifecycle listeners. Call once from the app setup hook.
 pub fn init<R: Runtime>(app: &AppHandle<R>) {
     // recording-started carries the meeting name; open an ingest session.
@@ -169,10 +237,23 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) {
         }
     });
 
-    // recording-stopped is the final stop event (carries folder_path + meeting_name);
-    // close the session here. Audio upload is wired in the audio phase.
-    app.listen("recording-stopped", move |_event| {
-        tauri::async_runtime::spawn(async move { end_session().await });
+    // recording-stopped is the final stop event (carries folder_path + meeting_name):
+    // close the session, then upload the cleaned channel WAV(s) from the folder.
+    app.listen("recording-stopped", move |event| {
+        let folder = serde_json::from_str::<serde_json::Value>(event.payload())
+            .ok()
+            .and_then(|v| v.get("folder_path").and_then(|f| f.as_str()).map(String::from));
+        tauri::async_runtime::spawn(async move {
+            // Capture session creds before end_session() consumes CURRENT.
+            let creds = {
+                let cur = CURRENT.lock().unwrap();
+                cur.as_ref().map(|s| (s.session_id.clone(), s.token.clone()))
+            };
+            end_session().await;
+            if let (Some((session_id, token)), Some(dir)) = (creds, folder) {
+                upload_audio(&token, &session_id, &dir).await;
+            }
+        });
     });
 
     log::info!("ingest: recorder ingest listeners registered");

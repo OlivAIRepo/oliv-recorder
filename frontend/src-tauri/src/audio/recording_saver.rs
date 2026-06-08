@@ -264,6 +264,10 @@ impl RecordingSaver {
         // Write initial metadata.json
         self.write_metadata(&meeting_folder, &metadata)?;
 
+        // Point the pipeline's per-channel WAV writers at this meeting folder so
+        // mic.wav / system.wav land here for end-of-call S3 upload.
+        super::channel_writer::set_channel_dir(Some(meeting_folder.clone()));
+
         self.meeting_folder = Some(meeting_folder);
         self.metadata = Some(metadata);
 

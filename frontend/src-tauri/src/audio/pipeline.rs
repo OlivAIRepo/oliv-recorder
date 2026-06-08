@@ -694,6 +694,8 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // Captures the cleaned mic + system channels to separate WAVs for S3 upload.
+    channel_writer: Option<super::channel_writer::DualChannelWriter>,
 }
 
 impl AudioPipeline {
@@ -760,12 +762,18 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            channel_writer: None,              // Opened in run() if a meeting folder is set
         }
     }
 
     /// Run the VAD-driven audio processing pipeline
     pub async fn run(mut self) -> Result<()> {
         info!("VAD-driven audio pipeline started - segments sent in real-time based on speech detection");
+
+        // Open the per-channel WAV writers if a meeting folder was set for this
+        // recording (mic.wav + system.wav for end-of-call S3 upload).
+        self.channel_writer =
+            super::channel_writer::DualChannelWriter::try_new(self.sample_rate);
 
         // CRITICAL FIX: Continue processing until channel is closed, not based on recording state
         // This ensures ALL chunks are processed during shutdown, fixing premature meeting completion
@@ -822,6 +830,12 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
+                            // Capture the cleaned channels separately (before mixing) for S3 upload.
+                            if let Some(cw) = self.channel_writer.as_mut() {
+                                cw.write_mic(&mic_window);
+                                cw.write_system(&sys_window);
+                            }
+
                             // Simple mixing without aggressive ducking
                             let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
 
@@ -892,6 +906,11 @@ impl AudioPipeline {
 
         // Flush any remaining VAD segments
         self.flush_remaining_audio()?;
+
+        // Finalize the per-channel WAVs (patch headers) so they're ready to upload.
+        if let Some(cw) = self.channel_writer.take() {
+            cw.finalize();
+        }
 
         info!("VAD-driven audio pipeline ended");
         Ok(())

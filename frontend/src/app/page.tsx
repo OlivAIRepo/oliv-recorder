@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import Image from 'next/image';
+import { invoke } from '@tauri-apps/api/core';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -56,9 +57,13 @@ export default function Home() {
 
   useEffect(() => {
     Analytics.trackPageView('home');
+    let restored = false;
     try {
-      setSensitive(sessionStorage.getItem(SENSITIVE_KEY) === 'true');
+      restored = sessionStorage.getItem(SENSITIVE_KEY) === 'true';
     } catch { /* sessionStorage unavailable */ }
+    setSensitive(restored);
+    // Sync the restored value to the backend so the upload decision matches.
+    invoke('oliv_set_sensitive', { sensitive: restored }).catch(() => { });
   }, []);
 
   const toggleSensitive = (val: boolean) => {
@@ -66,6 +71,7 @@ export default function Home() {
     try {
       sessionStorage.setItem(SENSITIVE_KEY, val ? 'true' : 'false');
     } catch { /* sessionStorage unavailable */ }
+    invoke('oliv_set_sensitive', { sensitive: val }).catch(() => { });
   };
 
   // Startup: prune old local meetings + offer crash recovery.
