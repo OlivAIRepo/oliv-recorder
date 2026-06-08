@@ -40,7 +40,16 @@ fn clear(key: &str) {
 }
 
 /// The current ic_token, if logged in. Read by the recorder ingest calls.
+///
+/// `OLIV_RECORDER_TOKEN` (env) takes precedence — a dev/testing convenience that
+/// bypasses the OS keychain entirely (and the keychain-access prompt you'd get
+/// when the token wasn't written by the app itself, e.g. injected for a test).
 pub fn ic_token() -> Option<String> {
+    if let Ok(t) = std::env::var("OLIV_RECORDER_TOKEN") {
+        if !t.trim().is_empty() {
+            return Some(t);
+        }
+    }
     read(TOKEN_KEY)
 }
 

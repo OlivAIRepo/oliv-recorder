@@ -23,6 +23,9 @@ const PROVIDER_LOCAL: &str = "local";
 struct SessionState {
     session_id: String,
     segment_count: u64,
+    // Token resolved once at session start and reused for segments/end, so the
+    // keychain is read at most once per recording (not per POST).
+    token: String,
 }
 
 static CURRENT: Mutex<Option<SessionState>> = Mutex::new(None);
@@ -53,14 +56,7 @@ struct TranscriptEvent {
     audio_end_time: f64,
 }
 
-async fn post_json(path: &str, body: serde_json::Value) -> Result<(), String> {
-    let token = match crate::auth::ic_token() {
-        Some(t) => t,
-        None => {
-            log::debug!("ingest: not logged in — skipping POST /{path}");
-            return Ok(());
-        }
-    };
+async fn post_json(token: &str, path: &str, body: serde_json::Value) -> Result<(), String> {
     let url = format!("{}/api/recorder/{}", backend_url(), path);
     let resp = reqwest::Client::new()
         .post(&url)
@@ -76,11 +72,22 @@ async fn post_json(path: &str, body: serde_json::Value) -> Result<(), String> {
 }
 
 async fn start_session(meeting_name: Option<String>) {
-    // New session id per recording; segments/end reference it.
+    // Resolve the token once for the whole recording (keychain read happens here only).
+    let token = match crate::auth::ic_token() {
+        Some(t) => t,
+        None => {
+            log::debug!("ingest: not logged in — skipping session");
+            return;
+        }
+    };
     let session_id = uuid::Uuid::new_v4().to_string();
     {
         let mut cur = CURRENT.lock().unwrap();
-        *cur = Some(SessionState { session_id: session_id.clone(), segment_count: 0 });
+        *cur = Some(SessionState {
+            session_id: session_id.clone(),
+            segment_count: 0,
+            token: token.clone(),
+        });
     }
     let body = json!({
         "provider": PROVIDER_LOCAL,
@@ -88,7 +95,7 @@ async fn start_session(meeting_name: Option<String>) {
         "title": meeting_name,
         "started_at": now_iso(),
     });
-    if let Err(e) = post_json("session", body).await {
+    if let Err(e) = post_json(&token, "session", body).await {
         log::warn!("ingest: {e}");
     } else {
         log::info!("ingest: started session {session_id}");
@@ -96,12 +103,12 @@ async fn start_session(meeting_name: Option<String>) {
 }
 
 async fn push_segment(ev: TranscriptEvent) {
-    let session_id = {
+    let (session_id, token) = {
         let mut cur = CURRENT.lock().unwrap();
         match cur.as_mut() {
             Some(s) => {
                 s.segment_count += 1;
-                s.session_id.clone()
+                (s.session_id.clone(), s.token.clone())
             }
             None => return, // no active ingest session
         }
@@ -117,16 +124,16 @@ async fn push_segment(ev: TranscriptEvent) {
         "confidence": ev.confidence,
     });
     let body = json!({ "session_id": session_id, "segments": [segment] });
-    if let Err(e) = post_json("segments", body).await {
+    if let Err(e) = post_json(&token, "segments", body).await {
         log::warn!("ingest: {e}");
     }
 }
 
 async fn end_session() {
-    let (session_id, count) = {
+    let (session_id, count, token) = {
         let mut cur = CURRENT.lock().unwrap();
         match cur.take() {
-            Some(s) => (s.session_id, s.segment_count),
+            Some(s) => (s.session_id, s.segment_count, s.token),
             None => return,
         }
     };
@@ -135,7 +142,7 @@ async fn end_session() {
         "ended_at": now_iso(),
         "segment_count": count,
     });
-    if let Err(e) = post_json("session/end", body).await {
+    if let Err(e) = post_json(&token, "session/end", body).await {
         log::warn!("ingest: {e}");
     } else {
         log::info!("ingest: ended session {session_id} ({count} segments)");
