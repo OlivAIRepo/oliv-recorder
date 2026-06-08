@@ -39,6 +39,7 @@ pub mod analytics;
 pub mod api;
 pub mod audio;
 pub mod auth;
+pub mod ingest;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -513,6 +514,9 @@ pub fn run() {
                     }
                 });
             }
+
+            // Stream the live transcript (+ audio later) to the recorder ingest.
+            crate::ingest::init(&_app.handle());
 
             // Oliv login deep link: olivrecorder://auth-callback?ic_token=...
             {

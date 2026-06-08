@@ -222,7 +222,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             now.format("%Y-%m-%d_%H-%M-%S")
         )
     });
-    manager.set_meeting_name(Some(effective_meeting_name));
+    manager.set_meeting_name(Some(effective_meeting_name.clone()));
 
     // Set up error callback
     let app_for_error = app.clone();
@@ -291,7 +291,8 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     app.emit("recording-started", serde_json::json!({
         "message": "Recording started successfully with parallel processing",
         "devices": ["Default Microphone", "Default System Audio"],
-        "workers": 3
+        "workers": 3,
+        "meeting_name": effective_meeting_name
     })).map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect recording state
@@ -390,7 +391,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             now.format("%Y-%m-%d_%H-%M-%S")
         )
     });
-    manager.set_meeting_name(Some(effective_meeting_name));
+    manager.set_meeting_name(Some(effective_meeting_name.clone()));
 
     // Set up error callback
     let app_for_error = app.clone();
@@ -462,7 +463,8 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             mic_device_name.unwrap_or_else(|| "Default Microphone".to_string()),
             system_device_name.unwrap_or_else(|| "Default System Audio".to_string())
         ],
-        "workers": 3
+        "workers": 3,
+        "meeting_name": effective_meeting_name
     })).map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect recording state
