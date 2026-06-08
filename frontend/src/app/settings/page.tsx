@@ -6,11 +6,14 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-// my.oliv.ai login, returning the ic_token to the app via the olivrecorder:// deep
-// link. The deep-link callback is handled in Rust (auth.rs) and persisted to the
-// OS keychain; it then emits `oliv-auth-changed`, which we listen for below.
+// my.oliv.ai login. The login flow only accepts same-origin final-pages, so we
+// point it at the my.oliv.ai/recorder-auth bridge page (autosched-mirror PR #447)
+// which, after login, redirects to olivrecorder://auth-callback?ic_token=... The
+// Rust deep-link handler (auth.rs) then persists the token to the OS keychain and
+// emits `oliv-auth-changed`, which we listen for below.
 const OLIV_LOGIN_URL =
-  'https://my.oliv.ai/login?final-page=olivrecorder://auth-callback';
+  'https://my.oliv.ai/login?final-page=' +
+  encodeURIComponent('https://my.oliv.ai/recorder-auth');
 
 export default function SettingsPage() {
   const router = useRouter();
