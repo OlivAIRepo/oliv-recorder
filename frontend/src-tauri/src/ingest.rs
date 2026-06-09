@@ -21,6 +21,9 @@ use tauri::{AppHandle, Listener, Runtime};
 
 const DEFAULT_BACKEND_URL: &str = "https://my.oliv.ai";
 const PROVIDER_LOCAL: &str = "local";
+// reqwest sends no User-Agent by default, and the prod WAF 403s requests with an
+// empty/missing UA before they reach the middleware. Always set one.
+const USER_AGENT: &str = concat!("OlivRecorder/", env!("CARGO_PKG_VERSION"));
 
 // "Sensitive meeting" toggle (Home screen). When set, only the cleaned mic
 // channel is uploaded; otherwise both mic + system are uploaded. Never raw mic.
@@ -78,6 +81,7 @@ async fn post_json(token: &str, path: &str, body: serde_json::Value) -> Result<(
     let url = format!("{}/api/recorder/{}", backend_url(), path);
     let resp = reqwest::Client::new()
         .post(&url)
+        .header("User-Agent", USER_AGENT)
         // Send as a cookie: the prod gateway strips underscore headers like
         // `ic_token`, so the header alone never reaches the middleware. The
         // middleware reads the token from either the cookie or the header.
@@ -236,6 +240,7 @@ async fn upload_channel(token: &str, session_id: &str, channel: &str, path: &Pat
     let url = format!("{}/api/recorder/audio", backend_url());
     let resp = reqwest::Client::new()
         .post(&url)
+        .header("User-Agent", USER_AGENT)
         .header("Cookie", format!("ic_token={token}"))
         .header("ic_token", token)
         .multipart(form)
