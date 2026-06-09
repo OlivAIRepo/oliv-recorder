@@ -6,13 +6,15 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-// my.oliv.ai login. The login flow only accepts same-origin final-pages, so we
-// point it at the my.oliv.ai/recorder-auth bridge page (autosched-mirror PR #447)
-// which, after login, redirects to olivrecorder://auth-callback?ic_token=... The
-// Rust deep-link handler (auth.rs) then persists the token to the OS keychain and
-// emits `oliv-auth-changed`, which we listen for below.
+// my.oliv.ai login. We point it at the same-origin my.oliv.ai/recorder-auth
+// bridge page (autosched-mirror) which, after login, redirects to
+// olivrecorder://auth-callback?ic_token=... The Rust deep-link handler (auth.rs)
+// then persists the token to the OS keychain and emits `oliv-auth-changed`,
+// which we listen for below.
+// Use `redirect=` (NOT `final-page=`): Login.tsx drives the post-login client
+// redirect off the `redirect` query param; `final-page` is ignored on that path.
 const OLIV_LOGIN_URL =
-  'https://my.oliv.ai/login?final-page=' +
+  'https://my.oliv.ai/login?redirect=' +
   encodeURIComponent('https://my.oliv.ai/recorder-auth');
 
 export default function SettingsPage() {
@@ -76,9 +78,7 @@ export default function SettingsPage() {
               <div className="mt-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 text-gray-700">
                   <CheckCircle2 className="w-5 h-5 text-green-600" />
-                  <span>
-                    Signed in as <span className="font-medium">{account.email}</span>
-                  </span>
+                  <span className="font-medium">Logged in</span>
                 </div>
                 <button
                   onClick={handleLogout}
