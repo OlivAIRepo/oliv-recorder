@@ -71,10 +71,13 @@ export class RecordingService {
     systemDeviceName: string | null,
     meetingName: string
   ): Promise<void> {
+    // Tauri v2 maps camelCase JS keys → snake_case Rust params. Sending
+    // snake_case keys here failed to bind, so meeting_name reached Rust as None
+    // and the backend fell back to a "Meeting <timestamp>" default name.
     return invoke('start_recording_with_devices_and_meeting', {
-      mic_device_name: micDeviceName,
-      system_device_name: systemDeviceName,
-      meeting_name: meetingName
+      micDeviceName,
+      systemDeviceName,
+      meetingName
     });
   }
 

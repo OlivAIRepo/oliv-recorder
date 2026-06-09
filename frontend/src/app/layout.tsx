@@ -18,6 +18,7 @@ import { TranscriptProvider } from '@/contexts/TranscriptContext'
 import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
+import LoginGate from '@/components/LoginGate'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
@@ -251,10 +252,12 @@ export default function RootLayout({
                               {showOnboarding ? (
                                 <OnboardingFlow onComplete={handleOnboardingComplete} />
                               ) : (
-                                <div className="flex">
-                                  <Sidebar />
-                                  <MainContent>{children}</MainContent>
-                                </div>
+                                <LoginGate>
+                                  <div className="flex">
+                                    <Sidebar />
+                                    <MainContent>{children}</MainContent>
+                                  </div>
+                                </LoginGate>
                               )}
                               {/* Import audio overlay and dialog */}
                               <ImportDropOverlay visible={showDropOverlay} />

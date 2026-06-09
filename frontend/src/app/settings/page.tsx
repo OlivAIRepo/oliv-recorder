@@ -5,17 +5,7 @@ import { ArrowLeft, LogIn, CheckCircle2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-
-// my.oliv.ai login. We point it at the same-origin my.oliv.ai/recorder-auth
-// bridge page (autosched-mirror) which, after login, redirects to
-// olivrecorder://auth-callback?ic_token=... The Rust deep-link handler (auth.rs)
-// then persists the token to the OS keychain and emits `oliv-auth-changed`,
-// which we listen for below.
-// Use `redirect=` (NOT `final-page=`): Login.tsx drives the post-login client
-// redirect off the `redirect` query param; `final-page` is ignored on that path.
-const OLIV_LOGIN_URL =
-  'https://my.oliv.ai/login?redirect=' +
-  encodeURIComponent('https://my.oliv.ai/recorder-auth');
+import { OLIV_LOGIN_URL } from '@/lib/olivAuth';
 
 export default function SettingsPage() {
   const router = useRouter();
