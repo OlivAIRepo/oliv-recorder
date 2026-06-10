@@ -82,6 +82,17 @@ struct TranscriptionStatus {
     last_activity_ms: u64,
 }
 
+/// Surface the main window (used by the meeting-detected prompt, since the app
+/// normally lives hidden in the menubar).
+#[tauri::command]
+fn show_main_window<R: Runtime>(app: AppHandle<R>) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 #[tauri::command]
 async fn start_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -518,6 +529,10 @@ pub fn run() {
             // Stream the live transcript (+ audio later) to the recorder ingest.
             crate::ingest::init(&_app.handle());
 
+            // Detect when a whitelisted meeting app starts using the mic so we
+            // can offer to start recording (emits `meeting-detected`).
+            crate::audio::mic_monitor::init(&_app.handle());
+
             // Oliv login deep link: olivrecorder://auth-callback?ic_token=...
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
@@ -541,6 +556,8 @@ pub fn run() {
             auth::get_oliv_account,
             auth::oliv_logout,
             ingest::oliv_set_sensitive,
+            ingest::oliv_set_source_app,
+            show_main_window,
             start_recording,
             stop_recording,
             is_recording,

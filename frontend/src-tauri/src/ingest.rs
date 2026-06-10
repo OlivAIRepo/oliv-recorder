@@ -36,6 +36,22 @@ pub fn oliv_set_sensitive(sensitive: bool) {
     log::info!("ingest: sensitive meeting = {sensitive}");
 }
 
+// Source app that triggered the recording (e.g. "zoom.us" from the auto-detect
+// prompt). Tags the ingest session; cleared at session end so a later manual
+// start isn't mislabelled. None for manual starts.
+static SOURCE_APP: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set by the meeting-detected prompt before an auto-started recording.
+#[tauri::command]
+pub fn oliv_set_source_app(app: Option<String>) {
+    let v = app.and_then(|s| {
+        let t = s.trim().to_string();
+        (!t.is_empty()).then_some(t)
+    });
+    log::info!("ingest: source app = {v:?}");
+    *SOURCE_APP.lock().unwrap() = v;
+}
+
 struct SessionState {
     session_id: String,
     segment_count: u64,
@@ -117,10 +133,12 @@ async fn start_session(meeting_name: Option<String>) {
             buffer: Vec::new(),
         });
     }
+    let source_app = SOURCE_APP.lock().unwrap().clone();
     let body = json!({
         "provider": PROVIDER_LOCAL,
         "session_id": session_id,
         "title": meeting_name,
+        "source_app": source_app,
         "started_at": now_iso(),
     });
     if let Err(e) = post_json(&token, "session", body).await {
@@ -206,6 +224,9 @@ async fn end_session() {
             None => return,
         }
     };
+    // Reset source tag so a subsequent manual recording isn't mislabelled.
+    *SOURCE_APP.lock().unwrap() = None;
+
     // Flush any still-buffered segments before ending.
     if !buffer.is_empty() {
         let body = json!({ "session_id": session_id, "segments": buffer });

@@ -19,6 +19,7 @@ import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
 import LoginGate from '@/components/LoginGate'
+import MeetingDetectedPrompt from '@/components/MeetingDetectedPrompt'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
@@ -257,6 +258,7 @@ export default function RootLayout({
                                     <Sidebar />
                                     <MainContent>{children}</MainContent>
                                   </div>
+                                  <MeetingDetectedPrompt />
                                 </LoginGate>
                               )}
                               {/* Import audio overlay and dialog */}
