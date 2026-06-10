@@ -176,7 +176,8 @@ mod imp {
                     kCFStringEncodingUTF8,
                 )
             };
-            if !got {
+            // CFStringGetCString returns a u8 Boolean (unlike CFNumberGetValue → bool).
+            if got == 0 {
                 continue;
             }
             if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str() {
