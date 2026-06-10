@@ -23,7 +23,7 @@ const DEFAULT_BACKEND_URL: &str = "https://my.oliv.ai";
 const PROVIDER_LOCAL: &str = "local";
 // reqwest sends no User-Agent by default, and the prod WAF 403s requests with an
 // empty/missing UA before they reach the middleware. Always set one.
-const USER_AGENT: &str = concat!("OlivRecorder/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("OlivRecorder/", env!("CARGO_PKG_VERSION"));
 
 // "Sensitive meeting" toggle (Home screen). When set, only the cleaned mic
 // channel is uploaded; otherwise both mic + system are uploaded. Never raw mic.
@@ -67,7 +67,7 @@ struct SessionState {
 
 static CURRENT: Mutex<Option<SessionState>> = Mutex::new(None);
 
-fn backend_url() -> String {
+pub(crate) fn backend_url() -> String {
     match std::env::var("OLIV_RECORDER_BACKEND") {
         Ok(v) if !v.trim().is_empty() => v.trim().trim_end_matches('/').to_string(),
         _ => DEFAULT_BACKEND_URL.to_string(),

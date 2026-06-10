@@ -112,49 +112,45 @@ export default function MeetingDetectedPrompt() {
 
   if (!detected) return null;
 
+  // Small, non-blocking bar pinned to the top-right of the screen.
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
-      <div className="w-[380px] rounded-xl bg-white p-6 shadow-2xl">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
-            <Mic className="h-5 w-5 text-blue-600" />
-          </span>
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Meeting detected</h2>
-            <p className="text-sm text-gray-500">
-              <span className="font-medium">{detected.app}</span> is using your microphone.
-            </p>
-          </div>
+    <div className="fixed top-4 right-4 z-[9999] w-[330px] rounded-xl border border-gray-200 bg-white p-4 shadow-2xl">
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50">
+          <Mic className="h-4 w-4 text-blue-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-gray-900">Meeting detected</h2>
+          <p className="truncate text-xs text-gray-500">
+            <span className="font-medium">{detected.app}</span> · starts in{' '}
+            <span className="font-semibold text-gray-900">{seconds}s</span>
+          </p>
         </div>
+      </div>
 
-        <label className="mt-5 flex items-center gap-2 text-sm text-gray-700">
-          <input
-            type="checkbox"
-            checked={sensitive}
-            onChange={(e) => setSensitive(e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-          Sensitive meeting (upload my mic only)
-        </label>
+      <label className="mt-3 flex items-center gap-2 text-xs text-gray-700">
+        <input
+          type="checkbox"
+          checked={sensitive}
+          onChange={(e) => setSensitive(e.target.checked)}
+          className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        Sensitive meeting (mic only)
+      </label>
 
-        <p className="mt-4 text-sm text-gray-500">
-          Recording starts automatically in <span className="font-semibold text-gray-900">{seconds}s</span>…
-        </p>
-
-        <div className="mt-5 flex items-center justify-end gap-3">
-          <button
-            onClick={dismiss}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
-          >
-            Dismiss
-          </button>
-          <button
-            onClick={() => start(sensitive, detected.app)}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-          >
-            Start now
-          </button>
-        </div>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button
+          onClick={dismiss}
+          className="rounded-md px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+        >
+          Dismiss
+        </button>
+        <button
+          onClick={() => start(sensitive, detected.app)}
+          className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
+        >
+          Start now
+        </button>
       </div>
     </div>
   );
