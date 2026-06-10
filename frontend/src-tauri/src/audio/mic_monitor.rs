@@ -159,7 +159,7 @@ mod imp {
                     &mut pid as *mut i64 as *mut c_void,
                 )
             };
-            if ok == 0 || !pids.contains(&pid) {
+            if !ok || !pids.contains(&pid) {
                 continue;
             }
             let name_val =
@@ -176,7 +176,7 @@ mod imp {
                     kCFStringEncodingUTF8,
                 )
             };
-            if got == 0 {
+            if !got {
                 continue;
             }
             if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str() {
