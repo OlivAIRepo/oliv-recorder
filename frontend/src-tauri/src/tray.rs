@@ -25,7 +25,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .menu(&menu)
         // Left-click toggles the window (menubar popover feel); right-click shows the menu.
         .show_menu_on_left_click(false)
-        .tooltip("Oliv Recorder")
+        .tooltip("Oliv AI")
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {

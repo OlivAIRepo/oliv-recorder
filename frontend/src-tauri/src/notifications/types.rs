@@ -119,14 +119,14 @@ impl Notification {
             None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
         };
 
-        Notification::new("Oliv Recorder", body, NotificationType::RecordingStarted)
+        Notification::new("Oliv AI", body, NotificationType::RecordingStarted)
             .with_priority(NotificationPriority::High)
             .with_timeout(NotificationTimeout::Seconds(5))
     }
 
     pub fn recording_stopped() -> Self {
         Notification::new(
-            "Oliv Recorder",
+            "Oliv AI",
             "Recording has been stopped and saved",
             NotificationType::RecordingStopped
         )
@@ -136,7 +136,7 @@ impl Notification {
 
     pub fn recording_paused() -> Self {
         Notification::new(
-            "Oliv Recorder",
+            "Oliv AI",
             "Recording has been paused",
             NotificationType::RecordingPaused
         )
@@ -146,7 +146,7 @@ impl Notification {
 
     pub fn recording_resumed() -> Self {
         Notification::new(
-            "Oliv Recorder",
+            "Oliv AI",
             "Recording has been resumed",
             NotificationType::RecordingResumed
         )
@@ -160,7 +160,7 @@ impl Notification {
             None => "Transcription has been completed".to_string(),
         };
 
-        Notification::new("Oliv Recorder", body, NotificationType::TranscriptionComplete)
+        Notification::new("Oliv AI", body, NotificationType::TranscriptionComplete)
             .with_priority(NotificationPriority::Normal)
             .with_timeout(NotificationTimeout::Seconds(5))
     }
@@ -171,7 +171,7 @@ impl Notification {
             None => format!("Meeting starts in {} minutes", minutes_until),
         };
 
-        Notification::new("Oliv Recorder", body, NotificationType::MeetingReminder(minutes_until))
+        Notification::new("Oliv AI", body, NotificationType::MeetingReminder(minutes_until))
             .with_priority(NotificationPriority::High)
             .with_timeout(NotificationTimeout::Seconds(10))
     }
@@ -189,7 +189,7 @@ impl Notification {
 
     pub fn test_notification() -> Self {
         Notification::new(
-            "Oliv Recorder",
+            "Oliv AI",
             "This is a test notification to verify the system is working correctly",
             NotificationType::Test
         )
