@@ -34,6 +34,7 @@ pub mod async_logger;
 pub mod batch_processor;
 pub mod system_detector;
 pub mod mic_monitor; // Mic-in-use meeting detection (whitelisted apps → prompt)
+pub mod echo_canceller; // NLMS AEC: strip speaker bleed from the mic channel
 pub mod system_audio_commands;
 pub mod device_monitor;  // NEW: Device disconnect/reconnect monitoring
 pub mod playback_monitor; // NEW: Playback device detection for BT warnings

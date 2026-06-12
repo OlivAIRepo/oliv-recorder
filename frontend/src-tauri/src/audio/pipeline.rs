@@ -775,6 +775,11 @@ impl AudioPipeline {
         self.channel_writer =
             super::channel_writer::DualChannelWriter::try_new(self.sample_rate);
 
+        // Acoustic echo canceller for the mic channel: removes the far side's
+        // speaker bleed using the system audio as the reference, so mic.wav is
+        // the user's voice only. State persists across windows for the recording.
+        let mut echo_canceller = super::echo_canceller::EchoCanceller::new();
+
         // CRITICAL FIX: Continue processing until channel is closed, not based on recording state
         // This ensures ALL chunks are processed during shutdown, fixing premature meeting completion
         // Previous bug: Loop checked `while self.state.is_recording()` which caused early exit when
@@ -831,8 +836,11 @@ impl AudioPipeline {
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
                             // Capture the cleaned channels separately (before mixing) for S3 upload.
+                            // Echo-cancel the mic against the system reference so mic.wav
+                            // carries the user's voice only, not the far side's speaker bleed.
                             if let Some(cw) = self.channel_writer.as_mut() {
-                                cw.write_mic(&mic_window);
+                                let mic_clean = echo_canceller.process(&mic_window, &sys_window);
+                                cw.write_mic(&mic_clean);
                                 cw.write_system(&sys_window);
                             }
 
