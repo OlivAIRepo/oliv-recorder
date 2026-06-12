@@ -17,8 +17,6 @@ import { useModalState } from '@/hooks/useModalState';
 import { useRecordingStateSync } from '@/hooks/useRecordingStateSync';
 import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
-import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
-import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 
@@ -28,7 +26,6 @@ const SENSITIVE_KEY = 'oliv_sensitive_meeting';
 export default function Home() {
   const [isRecording, setIsRecordingState] = useState(false);
   const [barHeights] = useState(['58%', '76%', '58%']);
-  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
   const [sensitive, setSensitive] = useState(false);
 
   const { meetingTitle, setMeetingTitle } = useTranscripts();
@@ -46,14 +43,6 @@ export default function Home() {
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
     setIsRecordingState, setIsRecordingDisabled
   );
-
-  const {
-    recoverableMeetings,
-    checkForRecoverableTranscripts,
-    recoverMeeting,
-    loadMeetingTranscripts,
-    deleteRecoverableMeeting,
-  } = useTranscriptRecovery();
 
   useEffect(() => {
     Analytics.trackPageView('home');
@@ -74,7 +63,7 @@ export default function Home() {
     invoke('oliv_set_sensitive', { sensitive: val }).catch(() => { });
   };
 
-  // Startup: prune old local meetings + offer crash recovery.
+  // Startup: prune old local meetings.
   useEffect(() => {
     const performStartupChecks = async () => {
       try {
@@ -88,48 +77,12 @@ export default function Home() {
         }
         try { await indexedDBService.deleteOldMeetings(7); } catch (e) { console.warn(e); }
         try { await indexedDBService.deleteSavedMeetings(24); } catch (e) { console.warn(e); }
-        await checkForRecoverableTranscripts();
       } catch (error) {
         console.error('Failed to perform startup checks:', error);
       }
     };
     performStartupChecks();
-  }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
-
-  useEffect(() => {
-    if (recoverableMeetings.length > 0) {
-      const shownThisSession = sessionStorage.getItem('recovery_dialog_shown');
-      if (!shownThisSession) {
-        setShowRecoveryDialog(true);
-        sessionStorage.setItem('recovery_dialog_shown', 'true');
-      }
-    }
-  }, [recoverableMeetings]);
-
-  const handleRecovery = async (meetingId: string) => {
-    try {
-      const result = await recoverMeeting(meetingId);
-      if (result.success) {
-        toast.success('Meeting recovered.', { duration: 6000 });
-        await refetchMeetings();
-        if (recoverableMeetings.length === 0) {
-          sessionStorage.removeItem('recovery_dialog_shown');
-        }
-      }
-    } catch (error) {
-      toast.error('Failed to recover meeting', {
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
-      });
-      throw error;
-    }
-  };
-
-  const handleDialogClose = () => {
-    setShowRecoveryDialog(false);
-    if (recoverableMeetings.length === 0) {
-      sessionStorage.removeItem('recovery_dialog_shown');
-    }
-  };
+  }, [recordingState.isRecording, status]);
 
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
   const nameValue = meetingTitle === '+ New Call' ? '' : meetingTitle;
@@ -146,15 +99,6 @@ export default function Home() {
       className="flex flex-col h-screen bg-gray-50"
     >
       <SettingsModals modals={modals} messages={messages} onClose={hideModal} />
-
-      <TranscriptRecovery
-        isOpen={showRecoveryDialog}
-        onClose={handleDialogClose}
-        recoverableMeetings={recoverableMeetings}
-        onRecover={handleRecovery}
-        onDelete={deleteRecoverableMeeting}
-        onLoadPreview={loadMeetingTranscripts}
-      />
 
       <div className="flex-1 flex flex-col items-center justify-center px-8">
         <div className="w-full max-w-md flex flex-col items-center gap-6">
