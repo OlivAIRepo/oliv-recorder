@@ -6,10 +6,16 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { OLIV_LOGIN_URL } from '@/lib/olivAuth';
+import { useConfig } from '@/contexts/ConfigContext';
+import { usePermissionCheck } from '@/hooks/usePermissionCheck';
+import { DeviceSelection } from '@/components/DeviceSelection';
+import { PermissionWarning } from '@/components/PermissionWarning';
 
 export default function SettingsPage() {
   const router = useRouter();
   const [account, setAccount] = useState<{ email: string } | null>(null);
+  const { selectedDevices, setSelectedDevices } = useConfig();
+  const { hasMicrophone, hasSystemAudio, checkPermissions } = usePermissionCheck();
 
   const refreshAccount = useCallback(() => {
     invoke<{ email: string } | null>('get_oliv_account')
@@ -91,6 +97,41 @@ export default function SettingsPage() {
                 </button>
               </>
             )}
+          </div>
+
+          {/* Permissions */}
+          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900">Permissions</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Oliv needs microphone and system-audio (screen recording) access to record meetings.
+            </p>
+            <div className="mt-4">
+              <PermissionWarning
+                hasMicrophone={hasMicrophone}
+                hasSystemAudio={hasSystemAudio}
+                onRecheck={checkPermissions}
+              />
+              {hasMicrophone && hasSystemAudio && (
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <CheckCircle2 className="w-5 h-5 text-green-600" />
+                  All permissions granted
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Audio devices */}
+          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900">Audio devices</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Choose which microphone and speaker (system audio) to record.
+            </p>
+            <div className="mt-4">
+              <DeviceSelection
+                selectedDevices={selectedDevices}
+                onDeviceChange={setSelectedDevices}
+              />
+            </div>
           </div>
         </div>
       </div>

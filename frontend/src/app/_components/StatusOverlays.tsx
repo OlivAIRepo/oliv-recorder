@@ -44,17 +44,10 @@ export function StatusOverlays({
 }: StatusOverlaysProps) {
   return (
     <>
-      {/* Processing status overlay - shown after recording stops while finalizing transcription */}
+      {/* Shown after recording stops, while the meeting is transcribed + saved. */}
       <StatusOverlay
-        show={isProcessing}
-        message="Finalizing transcription..."
-        sidebarCollapsed={sidebarCollapsed}
-      />
-
-      {/* Saving status overlay - shown while saving transcript to database */}
-      <StatusOverlay
-        show={isSaving}
-        message="Saving transcript..."
+        show={isProcessing || isSaving}
+        message="Transcribing your meeting…"
         sidebarCollapsed={sidebarCollapsed}
       />
     </>

@@ -172,6 +172,18 @@ export default function Home() {
             className="w-full text-center rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
           />
 
+          <label className="flex items-center gap-2 text-sm text-gray-600 select-none">
+            <input
+              type="checkbox"
+              checked={sensitive}
+              onChange={(e) => toggleSensitive(e.target.checked)}
+              disabled={recordingState.isRecording || isProcessingStop}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            Sensitive meeting
+            <span className="text-gray-400">— only your voice is transcribed</span>
+          </label>
+
           {controlsVisible && (
             <RecordingControls
               isRecording={recordingState.isRecording}
@@ -187,18 +199,6 @@ export default function Home() {
               meetingName={meetingTitle}
             />
           )}
-
-          <label className="flex items-center gap-2 text-sm text-gray-600 select-none">
-            <input
-              type="checkbox"
-              checked={sensitive}
-              onChange={(e) => toggleSensitive(e.target.checked)}
-              disabled={recordingState.isRecording || isProcessingStop}
-              className="h-4 w-4 rounded border-gray-300"
-            />
-            Sensitive meeting
-            <span className="text-gray-400">— only your mic is uploaded</span>
-          </label>
         </div>
       </div>
 

@@ -1,64 +1,58 @@
-import React from 'react';
-import { Lock, Sparkles, Cpu } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 
 export function WelcomeStep() {
-  const { goNext } = useOnboarding();
+  const { goNext, startBackgroundDownloads, completeOnboarding } = useOnboarding();
+  const [isMac, setIsMac] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const features = [
-    {
-      icon: Lock,
-      title: 'Your data never leaves your device',
-    },
-    {
-      icon: Sparkles,
-      title: 'Intelligent summaries & insights',
-    },
-    {
-      icon: Cpu,
-      title: 'Works offline, no cloud required',
-    },
-  ];
+  useEffect(() => {
+    (async () => {
+      try {
+        const { platform } = await import('@tauri-apps/plugin-os');
+        setIsMac(platform() === 'macos');
+      } catch {
+        setIsMac(navigator.userAgent.includes('Mac'));
+      }
+    })();
+  }, []);
+
+  const handleStart = async () => {
+    if (busy) return;
+    setBusy(true);
+    // Download the transcription + summarisation engines in the background —
+    // never a blocking step. Recording is gated on model-readiness at start time.
+    startBackgroundDownloads(true).catch(() => {});
+    if (isMac) {
+      goNext(); // → Permissions step (mic + system audio)
+    } else {
+      try {
+        await completeOnboarding();
+      } finally {
+        window.location.reload();
+      }
+    }
+  };
 
   return (
     <OnboardingContainer
-      title="Welcome to Oliv Recorder"
-      description="Record. Transcribe. Summarize. All on your device."
+      title="Welcome to Oliv AI"
+      description="Transcribe and summarise your meetings without bot"
       step={1}
       hideProgress={true}
     >
       <div className="flex flex-col items-center space-y-10">
-        {/* Divider */}
         <div className="w-16 h-px bg-gray-300" />
-
-        {/* Features Card */}
-        <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-4">
-          {features.map((feature, index) => {
-            const Icon = feature.icon;
-            return (
-              <div key={index} className="flex items-start gap-3">
-                <div className="flex-shrink-0 mt-0.5">
-                  <div className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center">
-                    <Icon className="w-3 h-3 text-gray-700" />
-                  </div>
-                </div>
-                <p className="text-sm text-gray-700 leading-relaxed">{feature.title}</p>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* CTA Section */}
-        <div className="w-full max-w-xs space-y-3">
+        <div className="w-full max-w-xs">
           <Button
-            onClick={goNext}
+            onClick={handleStart}
+            disabled={busy}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
           >
             Get Started
           </Button>
-          <p className="text-xs text-center text-gray-500">Takes less than 3 minutes</p>
         </div>
       </div>
     </OnboardingContainer>
