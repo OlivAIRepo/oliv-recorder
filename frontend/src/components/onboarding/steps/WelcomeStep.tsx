@@ -45,11 +45,11 @@ export function WelcomeStep() {
     >
       <div className="flex flex-col items-center space-y-10">
         <div className="w-16 h-px bg-gray-300" />
-        <div className="w-full max-w-xs">
+        <div className="flex justify-center">
           <Button
             onClick={handleStart}
             disabled={busy}
-            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
+            className="h-11 px-10 bg-gray-900 hover:bg-gray-800 text-white"
           >
             Get Started
           </Button>

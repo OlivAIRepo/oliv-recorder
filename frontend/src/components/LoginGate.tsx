@@ -49,7 +49,7 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
     <div className="h-screen bg-gray-50 flex flex-col items-center justify-center gap-6 px-8">
       <Image src="/logo-collapsed.png" alt="Oliv" width={56} height={45} priority />
       <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">Welcome to Oliv Recorder</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Welcome to Oliv AI</h1>
         <p className="mt-2 text-sm text-gray-500">
           Sign in with your Oliv account to continue.
         </p>

@@ -159,8 +159,8 @@ export default function Home() {
       <div className="flex-1 flex flex-col items-center justify-center px-8">
         <div className="w-full max-w-md flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-3">
-            <Image src="/logo.png" alt="Oliv Recorder" width={56} height={56} priority />
-            <h1 className="text-xl font-semibold text-gray-900">Oliv Recorder</h1>
+            <Image src="/logo.png" alt="Oliv AI" width={56} height={56} priority />
+            <h1 className="text-xl font-semibold text-gray-900">Oliv AI</h1>
           </div>
 
           <input

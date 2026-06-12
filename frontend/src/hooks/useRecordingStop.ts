@@ -294,14 +294,9 @@ export function useRecordingStop(
           // Mark as completed
           setStatus(RecordingStatus.COMPLETED);
 
-          // No post-recording summary: confirm the save and return to the idle
+          // No post-recording summary or save toast: just return to the idle
           // Home screen. The transcript streamed to the server during the call and
-          // the audio is uploaded at call-end — there is no on-device summary view.
-          toast.success('Recording saved.', {
-            description: `${freshTranscripts.length} transcript segments captured.`,
-            duration: 6000,
-          });
-
+          // the audio is uploaded at call-end.
           clearTranscripts();
           Analytics.trackPageView('home');
           setStatus(RecordingStatus.IDLE);
