@@ -15,7 +15,7 @@ export default function SettingsPage() {
   const router = useRouter();
   const [account, setAccount] = useState<{ email: string } | null>(null);
   const { selectedDevices, setSelectedDevices } = useConfig();
-  const { hasMicrophone, hasSystemAudio, checkPermissions } = usePermissionCheck();
+  const { hasMicrophone, hasSystemAudio, isChecking, checkPermissions } = usePermissionCheck();
 
   const refreshAccount = useCallback(() => {
     invoke<{ email: string } | null>('get_oliv_account')
@@ -106,16 +106,22 @@ export default function SettingsPage() {
               Oliv needs microphone and system-audio (screen recording) access to record meetings.
             </p>
             <div className="mt-4">
-              <PermissionWarning
-                hasMicrophone={hasMicrophone}
-                hasSystemAudio={hasSystemAudio}
-                onRecheck={checkPermissions}
-              />
-              {hasMicrophone && hasSystemAudio && (
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <CheckCircle2 className="w-5 h-5 text-green-600" />
-                  All permissions granted
-                </div>
+              {isChecking ? (
+                <p className="text-sm text-gray-500">Checking permissions…</p>
+              ) : (
+                <>
+                  <PermissionWarning
+                    hasMicrophone={hasMicrophone}
+                    hasSystemAudio={hasSystemAudio}
+                    onRecheck={checkPermissions}
+                  />
+                  {hasMicrophone && hasSystemAudio && (
+                    <div className="flex items-center gap-2 text-sm text-gray-700">
+                      <CheckCircle2 className="w-5 h-5 text-green-600" />
+                      All permissions granted
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
