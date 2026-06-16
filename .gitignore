@@ -81,3 +81,7 @@ Cargo.lock
 # This is an application, not a library: commit the workspace lock so CI builds
 # are reproducible (an uncommitted lock let tauri drift 2.6->2.11 and broke the build).
 !frontend/Cargo.lock
+
+# Never track local env files
+backend/temp.env
+**/temp.env
