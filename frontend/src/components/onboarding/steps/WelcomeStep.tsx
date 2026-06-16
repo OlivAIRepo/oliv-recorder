@@ -22,9 +22,10 @@ export function WelcomeStep() {
   const handleStart = async () => {
     if (busy) return;
     setBusy(true);
-    // Download the transcription + summarisation engines in the background —
-    // never a blocking step. Recording is gated on model-readiness at start time.
-    startBackgroundDownloads(true).catch(() => {});
+    // Download the transcription engine in the background — never a blocking
+    // step. The summary model is omitted (summaries are server-side; not used
+    // on-device). Recording is gated on transcription-model readiness at start.
+    startBackgroundDownloads(false).catch(() => {});
     if (isMac) {
       goNext(); // → Permissions step (mic + system audio)
     } else {
