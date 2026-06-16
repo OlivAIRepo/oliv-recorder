@@ -41,10 +41,13 @@ pub struct EchoCanceller {
     mu: f32,
     dtd: f32,
     leak: f32,
+    nlp_floor: f32,   // residual suppressor: output gain during far-end-only (1.0 = off)
     w: Vec<f32>,      // adaptive filter weights
     x_hist: Vec<f32>, // reference history, x_hist[0] = newest
     energy: f32,      // Σ x_hist² (maintained incrementally)
     ref_peak: f32,    // decaying peak of |reference| (recent far-end level)
+    gain: f32,        // smoothed residual-suppressor gain (attack fast, release slow)
+    hangover: u32,    // samples to keep the gate open after near-end speech
 }
 
 impl EchoCanceller {
@@ -54,17 +57,25 @@ impl EchoCanceller {
         let mu = env_f32("OLIV_AEC_MU", 0.20).clamp(0.01, 1.0);
         let dtd = env_f32("OLIV_AEC_DTD", 2.0).max(1.0);
         let leak = env_f32("OLIV_AEC_LEAK", 0.0001).clamp(0.0, 0.1);
-        log::info!("echo_canceller: enabled={enabled} taps={taps} mu={mu} dtd={dtd} leak={leak}");
+        // Residual suppressor: how far to duck the leftover echo when only the
+        // far-end is active. 1.0 disables it; lower = more aggressive.
+        let nlp_floor = env_f32("OLIV_AEC_NLP", 0.15).clamp(0.0, 1.0);
+        log::info!(
+            "echo_canceller: enabled={enabled} taps={taps} mu={mu} dtd={dtd} leak={leak} nlp={nlp_floor}"
+        );
         Self {
             enabled,
             taps,
             mu,
             dtd,
             leak,
+            nlp_floor,
             w: vec![0.0; taps],
             x_hist: vec![0.0; taps],
             energy: 0.0,
             ref_peak: 0.0,
+            gain: 1.0,
+            hangover: 0,
         }
     }
 
@@ -120,9 +131,25 @@ impl EchoCanceller {
                 }
             }
 
-            out.push(e.clamp(-1.0, 1.0));
+            // Residual echo suppressor: when only the far-end is active (no
+            // near-end speech, even within a ~200ms hangover after it), the
+            // leftover `e` is residual echo — duck it toward `nlp_floor`. The
+            // gain opens fast when you speak and releases slowly, so your voice
+            // is never gated. Coefficients assume 48kHz.
+            if near_end {
+                self.hangover = 9600; // ~200ms @48kHz
+            } else if self.hangover > 0 {
+                self.hangover -= 1;
+            }
+            let far_end_only = self.hangover == 0 && self.ref_peak > 1e-4;
+            let target = if far_end_only { self.nlp_floor } else { 1.0 };
+            // Attack fast (open for speech), release slow (smooth duck).
+            let coef = if target > self.gain { 0.05 } else { 0.0008 };
+            self.gain += (target - self.gain) * coef;
+
+            out.push((e * self.gain).clamp(-1.0, 1.0));
             sum_d2 += d * d;
-            sum_e2 += e * e;
+            sum_e2 += e * e; // safety check uses the pre-suppressor residual
         }
 
         // Safety net: if cancellation made this window LOUDER, the filter is
