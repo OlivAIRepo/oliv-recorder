@@ -1,5 +1,5 @@
-//! Oliv account auth — stores the `ic_token` minted by my.oliv.ai in the OS
-//! keychain and exposes it to the ingest calls.
+//! Oliv account auth — stores the `ic_token` minted by my.oliv.ai and exposes
+//! it to the ingest calls.
 //!
 //! Flow: the "Login with Oliv" button opens
 //!   https://my.oliv.ai/login?redirect=https://my.oliv.ai/recorder-auth
@@ -7,19 +7,21 @@
 //! redirects to
 //!   olivrecorder://auth-callback?ic_token=...&ic_user_id=...&email=...
 //! which the OS routes back to this app via tauri-plugin-deep-link. We parse the
-//! token and persist it (keychain), then notify the UI via `oliv-auth-changed`.
+//! token and persist it, then notify the UI via `oliv-auth-changed`.
 //!
-//! All credentials live in a SINGLE keychain item (one ACL → one keychain
-//! prompt) rather than one item per field, which previously triggered a prompt
-//! per field per read site.
+//! Storage: a single JSON file (`oliv_account.json`) in the app-data dir,
+//! user-only (0600) on unix. We deliberately do NOT use the OS keychain — on an
+//! unsigned build every keychain access raises two ACL prompts (item + key) and
+//! "Always Allow" doesn't persist across rebuilds. A file in app-data (same
+//! place as onboarding/DB) avoids the prompts entirely. Cleared on logout and
+//! wiped by reset/uninstall.
 
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-const SERVICE: &str = "ai.oliv.recorder";
-const ACCOUNT_KEY: &str = "oliv_account";
+const ACCOUNT_FILE: &str = "oliv_account.json";
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct StoredAccount {
@@ -30,10 +32,25 @@ struct StoredAccount {
     user_id: String,
 }
 
-// In-memory cache so the OS keychain is read at most ONCE per launch. Every
-// other read (login gate, Settings, ingest) is served from memory — otherwise
-// each distinct keychain access re-prompts on unsigned dev builds. Writes/logout
-// keep the cache in sync, so we never need to re-read.
+// Absolute path to the credentials file, resolved once at startup.
+static ACCOUNT_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Resolve and remember the credentials file path. Call once from app setup.
+pub fn init_store<R: Runtime>(app: &AppHandle<R>) {
+    match app.path().app_data_dir() {
+        Ok(dir) => {
+            let _ = ACCOUNT_PATH.set(dir.join(ACCOUNT_FILE));
+        }
+        Err(e) => log::error!("auth: could not resolve app_data_dir: {e}"),
+    }
+}
+
+fn account_path() -> Option<PathBuf> {
+    ACCOUNT_PATH.get().cloned()
+}
+
+// In-memory cache so the file is read at most once per launch; writes/logout
+// keep it in sync.
 struct Cache {
     loaded: bool,
     account: Option<StoredAccount>,
@@ -49,11 +66,6 @@ fn cache() -> &'static Mutex<Cache> {
     })
 }
 
-fn entry() -> keyring::Result<Entry> {
-    Entry::new(SERVICE, ACCOUNT_KEY)
-}
-
-/// Cached account: hits the keychain only on the first call of the launch.
 fn cached_account() -> Option<StoredAccount> {
     let mut c = cache().lock().unwrap();
     if !c.loaded {
@@ -77,16 +89,30 @@ fn store_account(acct: &StoredAccount) {
             return;
         }
     };
-    match entry().and_then(|e| e.set_password(&json)) {
-        Ok(()) => {}
-        Err(e) => log::error!("auth: failed to store account: {e}"),
+    if let Some(path) = account_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, json) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                }
+            }
+            Err(e) => log::error!("auth: failed to store account: {e}"),
+        }
+    } else {
+        log::error!("auth: account path not initialized");
     }
-    // Keep the in-memory cache in sync so subsequent reads don't hit the keychain.
+    // Keep the in-memory cache in sync.
     cache_set(Some(acct.clone()));
 }
 
 fn read_account() -> Option<StoredAccount> {
-    let json = entry().ok().and_then(|e| e.get_password().ok())?;
+    let path = account_path()?;
+    let json = std::fs::read_to_string(&path).ok()?;
     match serde_json::from_str::<StoredAccount>(&json) {
         Ok(a) if !a.token.is_empty() => Some(a),
         _ => None,
@@ -94,9 +120,8 @@ fn read_account() -> Option<StoredAccount> {
 }
 
 fn clear_account() {
-    if let Ok(e) = entry() {
-        // delete_credential errors when absent; ignore.
-        let _ = e.delete_credential();
+    if let Some(path) = account_path() {
+        let _ = std::fs::remove_file(&path);
     }
     cache_set(None);
 }

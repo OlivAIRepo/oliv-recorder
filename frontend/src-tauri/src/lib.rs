@@ -545,6 +545,9 @@ pub fn run() {
                 });
             }
 
+            // Resolve where the Oliv login token is stored (app-data file).
+            crate::auth::init_store(&_app.handle());
+
             // Stream the live transcript (+ audio later) to the recorder ingest.
             crate::ingest::init(&_app.handle());
 
