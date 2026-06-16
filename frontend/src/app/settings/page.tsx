@@ -49,7 +49,37 @@ export default function SettingsPage() {
   const router = useRouter();
   const [account, setAccount] = useState<{ email: string } | null>(null);
   const { selectedDevices, setSelectedDevices } = useConfig();
-  const { hasMicrophone, hasSystemAudio, isChecking, checkPermissions } = usePermissionCheck();
+  const { hasMicrophone, isChecking, checkPermissions } = usePermissionCheck();
+  // System-audio (Core Audio tap) permission: macOS exposes no non-prompting
+  // status for it, so we track whether it's been set up via a persisted flag.
+  const [audioGranted, setAudioGranted] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { Store } = await import('@tauri-apps/plugin-store');
+        const store = await Store.load('preferences.json');
+        setAudioGranted((await store.get<boolean>('system_audio_granted')) ?? false);
+      } catch {
+        /* store unavailable */
+      }
+    })();
+  }, []);
+
+  const grantSystemAudio = async () => {
+    // Creates the same Core Audio tap recording uses → triggers the correct
+    // Audio Capture prompt, so recording won't re-prompt afterwards.
+    await invoke<boolean>('trigger_system_audio_permission_command').catch(() => false);
+    try {
+      const { Store } = await import('@tauri-apps/plugin-store');
+      const store = await Store.load('preferences.json');
+      await store.set('system_audio_granted', true);
+      await store.save();
+    } catch {
+      /* store unavailable */
+    }
+    setAudioGranted(true);
+  };
 
   const refreshAccount = useCallback(() => {
     invoke<{ email: string } | null>('get_oliv_account')
@@ -154,12 +184,8 @@ export default function SettingsPage() {
                   />
                   <PermissionRow
                     label="System audio recording"
-                    granted={hasSystemAudio}
-                    onGrant={async () => {
-                      await invoke('request_screen_recording_permission_command').catch(() => {});
-                      // Re-check after the prompt; reopening Settings also reflects the truth.
-                      setTimeout(checkPermissions, 1500);
-                    }}
+                    granted={audioGranted}
+                    onGrant={grantSystemAudio}
                   />
                 </>
               )}
