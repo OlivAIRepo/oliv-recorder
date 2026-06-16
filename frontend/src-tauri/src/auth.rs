@@ -15,12 +15,13 @@
 
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Runtime};
 
 const SERVICE: &str = "ai.oliv.recorder";
 const ACCOUNT_KEY: &str = "oliv_account";
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 struct StoredAccount {
     token: String,
     #[serde(default)]
@@ -29,8 +30,43 @@ struct StoredAccount {
     user_id: String,
 }
 
+// In-memory cache so the OS keychain is read at most ONCE per launch. Every
+// other read (login gate, Settings, ingest) is served from memory — otherwise
+// each distinct keychain access re-prompts on unsigned dev builds. Writes/logout
+// keep the cache in sync, so we never need to re-read.
+struct Cache {
+    loaded: bool,
+    account: Option<StoredAccount>,
+}
+static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+
+fn cache() -> &'static Mutex<Cache> {
+    CACHE.get_or_init(|| {
+        Mutex::new(Cache {
+            loaded: false,
+            account: None,
+        })
+    })
+}
+
 fn entry() -> keyring::Result<Entry> {
     Entry::new(SERVICE, ACCOUNT_KEY)
+}
+
+/// Cached account: hits the keychain only on the first call of the launch.
+fn cached_account() -> Option<StoredAccount> {
+    let mut c = cache().lock().unwrap();
+    if !c.loaded {
+        c.account = read_account();
+        c.loaded = true;
+    }
+    c.account.clone()
+}
+
+fn cache_set(account: Option<StoredAccount>) {
+    let mut c = cache().lock().unwrap();
+    c.account = account;
+    c.loaded = true;
 }
 
 fn store_account(acct: &StoredAccount) {
@@ -45,6 +81,8 @@ fn store_account(acct: &StoredAccount) {
         Ok(()) => {}
         Err(e) => log::error!("auth: failed to store account: {e}"),
     }
+    // Keep the in-memory cache in sync so subsequent reads don't hit the keychain.
+    cache_set(Some(acct.clone()));
 }
 
 fn read_account() -> Option<StoredAccount> {
@@ -60,6 +98,7 @@ fn clear_account() {
         // delete_credential errors when absent; ignore.
         let _ = e.delete_credential();
     }
+    cache_set(None);
 }
 
 /// The current ic_token, if logged in. Read by the recorder ingest calls.
@@ -72,7 +111,7 @@ pub fn ic_token() -> Option<String> {
             return Some(t);
         }
     }
-    read_account().map(|a| a.token)
+    cached_account().map(|a| a.token)
 }
 
 #[derive(Serialize)]
@@ -92,7 +131,7 @@ pub fn get_oliv_account() -> Option<OlivAccount> {
             email: String::new(),
         });
     }
-    read_account().map(|a| OlivAccount { email: a.email })
+    cached_account().map(|a| OlivAccount { email: a.email })
 }
 
 #[tauri::command]
