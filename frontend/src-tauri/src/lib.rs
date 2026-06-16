@@ -93,6 +93,25 @@ fn show_main_window<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
+/// Wipe app data + log out, then restart into a fresh first-run state. Removes
+/// onboarding state, downloaded models, the local DB, and the login token
+/// (keychain). Recordings (~/Movies/oliv) are KEPT. Does NOT remove the app
+/// bundle or reset OS permissions — use scripts/uninstall.sh for a full wipe.
+#[tauri::command]
+fn reset_app_data<R: Runtime>(app: AppHandle<R>) {
+    log::info!("reset_app_data: clearing login + app data, restarting");
+    // Log out (clears keychain + in-memory cache).
+    let _ = auth::oliv_logout(app.clone());
+    // Delete the app-data dir (onboarding, models, DB, preferences).
+    if let Ok(dir) = app.path().app_data_dir() {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            log::warn!("reset_app_data: remove_dir_all({dir:?}) failed: {e}");
+        }
+    }
+    // Relaunch into a clean first-run (onboarding → download → login).
+    app.restart();
+}
+
 #[tauri::command]
 async fn start_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -558,6 +577,7 @@ pub fn run() {
             ingest::oliv_set_sensitive,
             ingest::oliv_set_source_app,
             show_main_window,
+            reset_app_data,
             start_recording,
             stop_recording,
             is_recording,

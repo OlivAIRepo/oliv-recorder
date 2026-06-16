@@ -20,6 +20,7 @@ import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
 import LoginGate from '@/components/LoginGate'
 import MeetingDetectedPrompt from '@/components/MeetingDetectedPrompt'
+import ResetHandler from '@/components/ResetHandler'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
@@ -281,6 +282,7 @@ export default function RootLayout({
           </RecordingStateProvider>
         </AnalyticsProvider>
 
+        <ResetHandler />
         <Toaster position="bottom-center" richColors closeButton />
       </body>
     </html>

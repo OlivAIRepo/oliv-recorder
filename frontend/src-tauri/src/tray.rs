@@ -60,6 +60,11 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             }
         }
         "check_updates" => check_updates_handler(app),
+        "reset_app_data" => {
+            // Surface the window and let the UI confirm before wiping.
+            focus_main_window(app);
+            let _ = app.emit("request-app-reset", true);
+        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -398,6 +403,7 @@ fn build_menu<R: Runtime>(
         .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
         .item(&MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?)
+        .item(&MenuItemBuilder::with_id("reset_app_data", "Reset App Data & Log Out").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
         .build()

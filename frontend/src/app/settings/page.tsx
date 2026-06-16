@@ -139,6 +139,21 @@ export default function SettingsPage() {
               />
             </div>
           </div>
+
+          {/* Reset */}
+          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900">Reset</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Log out and clear local app data (onboarding + downloaded models). The app
+              restarts and re-downloads the models. Your recordings are kept.
+            </p>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('oliv-open-reset'))}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
+            >
+              Reset app data &amp; log out
+            </button>
+          </div>
         </div>
       </div>
     </div>
