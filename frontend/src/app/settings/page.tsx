@@ -67,18 +67,18 @@ export default function SettingsPage() {
   }, []);
 
   const grantSystemAudio = async () => {
-    // Creates the same Core Audio tap recording uses → triggers the correct
+    // Starts the same Core Audio tap recording uses → triggers the correct
     // Audio Capture prompt, so recording won't re-prompt afterwards.
-    await invoke<boolean>('trigger_system_audio_permission_command').catch(() => false);
+    const ok = await invoke<boolean>('trigger_system_audio_permission_command').catch(() => false);
     try {
       const { Store } = await import('@tauri-apps/plugin-store');
       const store = await Store.load('preferences.json');
-      await store.set('system_audio_granted', true);
+      await store.set('system_audio_granted', ok);
       await store.save();
     } catch {
       /* store unavailable */
     }
-    setAudioGranted(true);
+    setAudioGranted(ok);
   };
 
   const refreshAccount = useCallback(() => {
