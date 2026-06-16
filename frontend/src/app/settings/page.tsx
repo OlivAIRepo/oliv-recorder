@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, LogIn, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, LogIn, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -9,7 +9,41 @@ import { OLIV_LOGIN_URL } from '@/lib/olivAuth';
 import { useConfig } from '@/contexts/ConfigContext';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { DeviceSelection } from '@/components/DeviceSelection';
-import { PermissionWarning } from '@/components/PermissionWarning';
+
+// One permission's real state + a Grant button when it's missing.
+function PermissionRow({
+  label,
+  granted,
+  onGrant,
+}: {
+  label: string;
+  granted: boolean;
+  onGrant: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-sm">
+        {granted ? (
+          <CheckCircle2 className="w-5 h-5 text-green-600" />
+        ) : (
+          <AlertTriangle className="w-5 h-5 text-amber-500" />
+        )}
+        <span className="text-gray-700">{label}</span>
+        <span className={granted ? 'text-green-600' : 'text-amber-600'}>
+          {granted ? 'Granted' : 'Not granted'}
+        </span>
+      </div>
+      {!granted && (
+        <button
+          onClick={onGrant}
+          className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+        >
+          Grant
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -105,22 +139,28 @@ export default function SettingsPage() {
             <p className="mt-1 text-sm text-gray-500">
               Oliv needs microphone and system-audio (screen recording) access to record meetings.
             </p>
-            <div className="mt-4">
+            <div className="mt-4 space-y-3">
               {isChecking ? (
                 <p className="text-sm text-gray-500">Checking permissions…</p>
               ) : (
                 <>
-                  <PermissionWarning
-                    hasMicrophone={hasMicrophone}
-                    hasSystemAudio={hasSystemAudio}
-                    onRecheck={checkPermissions}
+                  <PermissionRow
+                    label="Microphone"
+                    granted={hasMicrophone}
+                    onGrant={async () => {
+                      await invoke('trigger_microphone_permission').catch(() => {});
+                      setTimeout(checkPermissions, 1000);
+                    }}
                   />
-                  {hasMicrophone && hasSystemAudio && (
-                    <div className="flex items-center gap-2 text-sm text-gray-700">
-                      <CheckCircle2 className="w-5 h-5 text-green-600" />
-                      All permissions granted
-                    </div>
-                  )}
+                  <PermissionRow
+                    label="System audio recording"
+                    granted={hasSystemAudio}
+                    onGrant={async () => {
+                      await invoke('request_screen_recording_permission_command').catch(() => {});
+                      // Re-check after the prompt; reopening Settings also reflects the truth.
+                      setTimeout(checkPermissions, 1500);
+                    }}
+                  />
                 </>
               )}
             </div>

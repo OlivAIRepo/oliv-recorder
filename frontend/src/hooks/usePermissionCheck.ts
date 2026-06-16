@@ -27,16 +27,17 @@ export function usePermissionCheck() {
       const inputDevices = devices.filter(d => d.device_type === 'Input');
       const hasMicrophone = inputDevices.length > 0;
 
-      // Check for system audio devices (Output)
-      // On macOS, we need ScreenCaptureKit devices for system audio
-      const outputDevices = devices.filter(d => d.device_type === 'Output');
-      const hasSystemAudio = outputDevices.length > 0;
+      // System-audio permission: the REAL OS check (Screen & System Audio
+      // Recording), not "do output devices exist" — the latter is always true
+      // and made Settings falsely report it as granted. Non-prompting.
+      const hasSystemAudio = await invoke<boolean>('check_screen_recording_permission_command').catch(
+        () => false
+      );
 
       console.log('Permission check:', {
         hasMicrophone,
         hasSystemAudio,
         inputDevices: inputDevices.length,
-        outputDevices: outputDevices.length
       });
 
       setStatus({

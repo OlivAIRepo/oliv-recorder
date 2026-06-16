@@ -5,23 +5,23 @@ use log::{info, warn, error};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
-/// Check if the app has Audio Capture permission (required for Core Audio taps on macOS 14.4+)
-///
-/// Note: Core Audio taps require NSAudioCaptureUsageDescription in Info.plist.
-/// When the app first attempts to create a Core Audio tap, macOS will automatically
-/// show a permission dialog to the user. If permission is denied, the tap will return
-/// silence (all zeros).
-///
-/// This function returns true because the actual permission prompt happens automatically
-/// when AudioHardwareCreateProcessTap is called by the cidre library.
+// CoreGraphics (already linked by the core-graphics crate). On modern macOS the
+// system-audio capture used by the Core Audio tap is gated by the "Screen &
+// System Audio Recording" permission; these give a real NON-prompting check and
+// a native prompt for it.
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+/// Real, non-prompting check for the system-audio recording permission required
+/// by the Core Audio tap. (Previously hardcoded to `true`, which made Settings
+/// falsely report it as granted.)
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording_permission() -> bool {
-    info!("ℹ️  Core Audio tap requires Audio Capture permission (macOS 14.4+)");
-    info!("📍 Permission dialog will appear automatically when recording starts");
-    info!("   If already granted: System Settings → Privacy & Security → Audio Capture");
-
-    // Always return true - the actual permission dialog is triggered by Core Audio API
-    true
+    unsafe { CGPreflightScreenCaptureAccess() }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -33,25 +33,17 @@ pub fn check_screen_recording_permission() -> bool {
 /// This will open System Settings to the Privacy & Security page
 #[cfg(target_os = "macos")]
 pub fn request_screen_recording_permission() -> Result<()> {
-    info!("🔐 Opening System Settings for Audio Capture permission...");
-
-    // Open System Settings to Privacy & Security page
-    // Note: There's no direct URL for Audio Capture, so we open the main Privacy page
-    let result = Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security")
-        .spawn();
-
-    match result {
-        Ok(_) => {
-            info!("✅ Opened System Settings - navigate to Privacy & Security → Audio Capture");
-            info!("👉 Please enable Audio Capture permission and restart the app");
-            Ok(())
-        }
-        Err(e) => {
-            error!("❌ Failed to open System Settings: {}", e);
-            Err(anyhow::anyhow!("Failed to open System Settings: {}", e))
-        }
+    // Native prompt — grants in-place when the permission is undetermined.
+    let granted = unsafe { CGRequestScreenCaptureAccess() };
+    info!("🔐 CGRequestScreenCaptureAccess -> {granted}");
+    if !granted {
+        // Already-determined/denied: the prompt won't re-appear, so open the
+        // exact Privacy pane for the user to toggle it manually.
+        let _ = Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
     }
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
