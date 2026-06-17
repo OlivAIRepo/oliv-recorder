@@ -44,7 +44,14 @@ export function OnboardingContainer({
 
   return (
     <div className="fixed inset-0 bg-gray-50 flex items-center justify-center z-50 overflow-hidden">
-      <div className={cn('w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6', className)}>
+      <div
+        className={cn(
+          'w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6',
+          // No progress bar (e.g. Welcome) → vertically center the content.
+          hideProgress && 'justify-center',
+          className
+        )}
+      >
         {/* Progress Indicator with Navigation - Fixed */}
         {step && !hideProgress && (
           <div className="mb-2 relative flex-shrink-0">
@@ -94,8 +101,9 @@ export function OnboardingContainer({
           )}
         </div>
 
-        {/* Content - Scrollable */}
-        <div className="flex-1 overflow-y-auto pr-2">
+        {/* Content - Scrollable (grows only when there's a progress bar; for the
+            centered no-progress screen it stays its natural height). */}
+        <div className={cn('overflow-y-auto pr-2', !hideProgress && 'flex-1')}>
           <div className="space-y-6">{children}</div>
         </div>
       </div>
