@@ -84,12 +84,15 @@ export default function Home() {
     performStartupChecks();
   }, [recordingState.isRecording, status]);
 
-  const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
+  // The whole stop → transcribe → save tail: hide the controls cluster and show
+  // only the bottom banner; everything returns to normal once it clears.
+  const isFinishing =
+    status === RecordingStatus.STOPPING ||
+    status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
+    status === RecordingStatus.SAVING;
+  const isProcessingStop = isFinishing || isProcessing;
   const nameValue = meetingTitle === '+ New Call' ? '' : meetingTitle;
-  const controlsVisible =
-    (hasMicrophone || isRecording) &&
-    status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
-    status !== RecordingStatus.SAVING;
+  const controlsVisible = (hasMicrophone || isRecording) && !isFinishing;
 
   return (
     <motion.div
@@ -147,8 +150,8 @@ export default function Home() {
       </div>
 
       <StatusOverlays
-        isProcessing={status === RecordingStatus.PROCESSING_TRANSCRIPTS && !recordingState.isRecording}
-        isSaving={status === RecordingStatus.SAVING}
+        isProcessing={isFinishing && !recordingState.isRecording}
+        isSaving={false}
         sidebarCollapsed={sidebarCollapsed}
       />
     </motion.div>
