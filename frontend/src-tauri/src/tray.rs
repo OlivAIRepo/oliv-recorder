@@ -26,9 +26,13 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         // Left-click toggles the window (menubar popover feel); right-click shows the menu.
         .show_menu_on_left_click(false)
         .tooltip("Oliv AI")
-        .icon(app.default_window_icon().unwrap().clone())
-        // Render as a macOS template image → monochrome menubar icon that adapts
-        // to light/dark (appears white in a dark menubar), like other apps.
+        // Dedicated monochrome glyph (oval + cut-out eyes on transparent bg).
+        // The app icon is a filled square, so template-rendering it gives a black
+        // blob — this asset is shaped so macOS tints it white in a dark menubar.
+        .icon(
+            tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template@2x.png"))
+                .expect("tray template icon decodes"),
+        )
         .icon_as_template(true)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
@@ -169,7 +173,7 @@ fn resume_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
+pub fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     // Immediately show stopping state
     set_tray_state(app, RecordingState::Stopping);
 

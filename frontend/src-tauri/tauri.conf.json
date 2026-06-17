@@ -10,18 +10,36 @@
         "beforeBuildCommand": "pnpm build"
     },
     "app": {
+        "withGlobalTauri": true,
         "windows": [
             {
+                "label": "main",
                 "title": "Oliv AI",
-                "width": 400,
-                "height": 640,
-                "minWidth": 360,
-                "minHeight": 520,
+                "width": 550,
+                "height": 520,
+                "minWidth": 480,
+                "minHeight": 480,
                 "resizable": true,
                 "fullscreen": false,
                 "theme": "Light",
                 "decorations": true,
                 "skipTaskbar": true
+            },
+            {
+                "label": "meeting-prompt",
+                "title": "Meeting detected",
+                "url": "meeting-prompt.html",
+                "width": 340,
+                "height": 168,
+                "resizable": false,
+                "fullscreen": false,
+                "decorations": false,
+                "transparent": true,
+                "alwaysOnTop": true,
+                "skipTaskbar": true,
+                "focus": false,
+                "visible": false,
+                "shadow": true
             }
         ],
         "macOSPrivateApi": true,
@@ -43,7 +61,8 @@
                     "identifier": "main",
                     "description": "Main window capability with file system and media access",
                     "windows": [
-                        "main"
+                        "main",
+                        "meeting-prompt"
                     ],
                     "permissions": [
                         "fs:default",
@@ -58,6 +77,7 @@
                         "core:path:default",
                         "core:event:default",
                         "core:window:default",
+                        "core:window:allow-hide",
                         "core:app:default",
                         "core:resources:default",
                         "core:menu:default",

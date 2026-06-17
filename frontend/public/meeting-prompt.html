@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting detected</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: default;
+        overflow: hidden;
+      }
+      .card {
+        margin: 10px;
+        height: calc(100% - 20px);
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .row { display: flex; align-items: center; gap: 10px; }
+      .icon {
+        flex: 0 0 auto;
+        width: 34px; height: 34px;
+        border-radius: 999px;
+        background: #eff6ff;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .icon svg { width: 17px; height: 17px; color: #2563eb; }
+      .title { font-size: 13.5px; font-weight: 600; color: #111827; margin: 0; }
+      .sub { font-size: 12px; color: #6b7280; margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sub b { color: #111827; font-weight: 600; }
+      .chk { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #374151; margin: 2px 0; }
+      .chk input { width: 14px; height: 14px; accent-color: #2563eb; margin: 0; }
+      .actions { display: flex; justify-content: flex-end; gap: 8px; }
+      button {
+        border: 0; border-radius: 8px; font-size: 12px; font-weight: 600;
+        padding: 7px 12px; cursor: pointer; font-family: inherit;
+      }
+      .dismiss { background: transparent; color: #6b7280; }
+      .dismiss:hover { background: #f3f4f6; }
+      .start { background: #2563eb; color: #fff; }
+      .start:hover { background: #1d4ed8; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="row">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </span>
+        <div style="min-width: 0;">
+          <p class="title">Meeting detected</p>
+          <p class="sub"><b id="app">a meeting app</b> · starts in <b id="secs">20s</b></p>
+        </div>
+      </div>
+
+      <label class="chk">
+        <input type="checkbox" id="sensitive" />
+        Sensitive meeting (mic only)
+      </label>
+
+      <div class="actions">
+        <button class="dismiss" id="dismiss">Dismiss</button>
+        <button class="start" id="start">Start now</button>
+      </div>
+    </div>
+
+    <script src="meeting-prompt.js"></script>
+  </body>
+</html>
