@@ -79,6 +79,14 @@ export default function SettingsPage() {
       /* store unavailable */
     }
     setAudioGranted(ok);
+    // Starting the Core Audio / ScreenCaptureKit tap briefly steals foreground;
+    // pull our window back to front so the user lands back in Settings.
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().setFocus();
+    } catch {
+      /* not in a Tauri window */
+    }
   };
 
   const refreshAccount = useCallback(() => {
