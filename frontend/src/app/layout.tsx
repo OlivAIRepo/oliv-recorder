@@ -22,7 +22,6 @@ import LoginGate from '@/components/LoginGate'
 import MeetingDetectedPrompt from '@/components/MeetingDetectedPrompt'
 import ResetHandler from '@/components/ResetHandler'
 import { loadBetaFeatures } from '@/types/betaFeatures'
-import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
@@ -247,8 +246,6 @@ export default function RootLayout({
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
                             <ImportDialogProvider onOpen={handleOpenImportDialog}>
-                              {/* Download progress toast provider - listens for background downloads */}
-                              <DownloadProgressToastProvider />
 
                               {/* Show onboarding or main app */}
                               {showOnboarding ? (
