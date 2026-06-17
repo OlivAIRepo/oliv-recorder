@@ -37,7 +37,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onTranscriptionError,
   onStopInitiated,
   isRecordingDisabled,
-  isParentProcessing,
   selectedDevices,
   meetingName,
 }) => {
@@ -343,14 +342,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     <TooltipProvider>
       <div className="flex flex-col space-y-2">
         <div className="flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
-          {isProcessing && !isParentProcessing ? (
-            <div className="flex items-center space-x-2">
-              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
-              <span className="text-sm text-gray-600">Transcribing your meeting…</span>
-            </div>
-          ) : (
-            <>
-              {showPlayback ? (
+          {showPlayback ? (
                 <>
                   <button
                     onClick={handleStartRecording}
@@ -472,8 +464,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                   )}
                 </>
               )}
-            </>
-          )}
         </div>
 
         {/* Show validation status only */}
