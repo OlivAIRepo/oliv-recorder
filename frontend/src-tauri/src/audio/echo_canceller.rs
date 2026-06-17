@@ -16,7 +16,7 @@
 //!
 //! Same code on macOS and Windows (no platform AEC). Tunable via env (read once
 //! at construction), so the echo path can be dialed in without a rebuild:
-//!   OLIV_AEC_ENABLED (default on; "0"/"false" disables)
+//!   OLIV_AEC_ENABLED (default OFF; set "1"/"true" to re-enable for testing)
 //!   OLIV_AEC_TAPS    (filter length; default 4096 ≈ 85ms @48kHz)
 //!   OLIV_AEC_MU      (NLMS step size 0..1; default 0.20)
 //!   OLIV_AEC_DTD     (double-talk peak threshold; default 2.0; higher = adapt more)
@@ -52,7 +52,10 @@ pub struct EchoCanceller {
 
 impl EchoCanceller {
     pub fn new() -> Self {
-        let enabled = env_bool("OLIV_AEC_ENABLED", true);
+        // Default OFF: the hand-rolled NLMS can't beat built-in-speaker bleed
+        // (nonlinear + reverberant residual) cleanly and risks adding artifacts.
+        // mic.wav is written raw unless explicitly re-enabled for testing.
+        let enabled = env_bool("OLIV_AEC_ENABLED", false);
         let taps = env_usize("OLIV_AEC_TAPS", 4096).clamp(64, 32_768);
         let mu = env_f32("OLIV_AEC_MU", 0.20).clamp(0.01, 1.0);
         let dtd = env_f32("OLIV_AEC_DTD", 2.0).max(1.0);
