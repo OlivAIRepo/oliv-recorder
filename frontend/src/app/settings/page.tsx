@@ -206,6 +206,17 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* Updates */}
+          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900">Updates</h2>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('check-updates-from-tray'))}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Check for updates
+            </button>
+          </div>
+
           {/* Reset */}
           <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900">Reset</h2>

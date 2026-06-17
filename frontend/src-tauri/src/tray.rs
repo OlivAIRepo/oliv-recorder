@@ -27,6 +27,9 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .tooltip("Oliv AI")
         .icon(app.default_window_icon().unwrap().clone())
+        // Render as a macOS template image → monochrome menubar icon that adapts
+        // to light/dark (appears white in a dark menubar), like other apps.
+        .icon_as_template(true)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -402,8 +405,6 @@ fn build_menu<R: Runtime>(
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
-        .item(&MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?)
-        .item(&MenuItemBuilder::with_id("reset_app_data", "Reset App Data & Log Out").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
         .build()

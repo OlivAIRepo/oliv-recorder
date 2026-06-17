@@ -13,8 +13,10 @@
         "windows": [
             {
                 "title": "Oliv AI",
-                "width": 1100,
-                "height": 700,
+                "width": 400,
+                "height": 640,
+                "minWidth": 360,
+                "minHeight": 520,
                 "resizable": true,
                 "fullscreen": false,
                 "theme": "Light",
