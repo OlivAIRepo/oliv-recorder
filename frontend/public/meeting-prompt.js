@@ -8,7 +8,6 @@
 
   var titleEl = document.getElementById("title");
   var subEl = document.getElementById("sub");
-  var micIcon = document.getElementById("micIcon");
   var sensitiveRow = document.getElementById("sensitiveRow");
   var sensitiveEl = document.getElementById("sensitive");
   var btnPrimary = document.getElementById("btnPrimary");
@@ -31,7 +30,6 @@
     titleEl.textContent = "Meeting detected";
     subEl.innerHTML = '<b id="app"></b>';
     document.getElementById("app").textContent = currentApp;
-    micIcon.classList.remove("hidden");
     sensitiveRow.classList.remove("hidden");
     sensitiveEl.checked = false;
     btnSecondary.textContent = "Dismiss";
@@ -45,7 +43,6 @@
     mode = "ended";
     titleEl.textContent = "Meeting ended";
     subEl.innerHTML = "Keep transcribing this session?";
-    micIcon.classList.add("hidden");
     sensitiveRow.classList.add("hidden");
     btnSecondary.textContent = "End";
     btnSecondary.className = "danger";

@@ -39,7 +39,7 @@
                 "skipTaskbar": true,
                 "focus": false,
                 "visible": false,
-                "shadow": true
+                "shadow": false
             }
         ],
         "macOSPrivateApi": true,
