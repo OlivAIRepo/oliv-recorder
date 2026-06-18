@@ -3,61 +3,73 @@
   if (!T) return;
   var listen = T.event.listen;
   var emit = T.event.emit;
+  var invoke = T.core.invoke;
   var getCurrentWindow = T.window.getCurrentWindow;
 
-  var COUNTDOWN = 20;
+  var titleEl = document.getElementById("title");
+  var subEl = document.getElementById("sub");
   var appEl = document.getElementById("app");
-  var secsEl = document.getElementById("secs");
+  var sensitiveRow = document.getElementById("sensitiveRow");
   var sensitiveEl = document.getElementById("sensitive");
+  var btnPrimary = document.getElementById("btnPrimary");
+  var btnSecondary = document.getElementById("btnSecondary");
 
+  var mode = "detect"; // "detect" | "ended"
   var currentApp = "a meeting app";
-  var seconds = COUNTDOWN;
-  var timer = null;
-  var started = false;
 
   function hide() {
     try { getCurrentWindow().hide(); } catch (e) {}
   }
-  function stopTimer() {
-    if (timer) { clearInterval(timer); timer = null; }
-  }
-  function start() {
-    if (started) return;
-    started = true;
-    stopTimer();
-    emit("start-recording-from-prompt", { app: currentApp, sensitive: sensitiveEl.checked });
-    hide();
-  }
-  function dismiss() {
-    started = true;
-    stopTimer();
-    hide();
-  }
-  function tick() {
-    seconds -= 1;
-    secsEl.textContent = seconds + "s";
-    if (seconds <= 0) start();
-  }
-  function onDetected(app) {
-    started = false;
+
+  // --- Meeting detected: opt-in start (no countdown). ---
+  function renderDetect(app) {
+    mode = "detect";
     currentApp = app || "a meeting app";
-    appEl.textContent = currentApp;
+    titleEl.textContent = "Meeting detected";
+    subEl.innerHTML = '<b id="app"></b>';
+    document.getElementById("app").textContent = currentApp;
+    sensitiveRow.classList.remove("hidden");
     sensitiveEl.checked = false;
-    seconds = COUNTDOWN;
-    secsEl.textContent = seconds + "s";
-    stopTimer();
-    timer = setInterval(tick, 1000);
+    btnSecondary.textContent = "Dismiss";
+    btnSecondary.className = "secondary";
+    btnPrimary.textContent = "Start transcription";
+    btnPrimary.className = "primary";
   }
 
-  document.getElementById("start").addEventListener("click", start);
-  document.getElementById("dismiss").addEventListener("click", dismiss);
+  // --- Meeting ended: persistent continue/end. ---
+  function renderEnded() {
+    mode = "ended";
+    titleEl.textContent = "Meeting ended";
+    subEl.innerHTML = "Keep transcribing this session?";
+    sensitiveRow.classList.add("hidden");
+    btnSecondary.textContent = "End";
+    btnSecondary.className = "danger";
+    btnPrimary.textContent = "Continue";
+    btnPrimary.className = "primary";
+  }
+
+  btnPrimary.addEventListener("click", function () {
+    if (mode === "detect") {
+      emit("start-recording-from-prompt", { app: currentApp, sensitive: sensitiveEl.checked });
+    }
+    // ended → "Continue": just keep transcribing.
+    hide();
+  });
+
+  btnSecondary.addEventListener("click", function () {
+    if (mode === "ended") {
+      // "End" → stop transcription.
+      invoke("oliv_stop_recording").catch(function () {});
+    }
+    // detect → "Dismiss": close only, never open the app.
+    hide();
+  });
 
   listen("meeting-detected", function (e) {
-    var p = e && e.payload ? e.payload : {};
-    onDetected(p.app);
+    var p = (e && e.payload) || {};
+    renderDetect(p.app);
   });
-  // Meeting vanished before the user acted — close the prompt.
   listen("meeting-ended", function () {
-    dismiss();
+    renderEnded();
   });
 })();

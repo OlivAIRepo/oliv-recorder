@@ -242,6 +242,14 @@ async fn is_recording() -> bool {
     audio::recording_commands::is_recording().await
 }
 
+/// Stop transcription from the floating meeting-ended banner ("End"). Reuses the
+/// tray stop path (stops the stream + emits `recording-stop-complete` so the
+/// frontend runs its post-processing).
+#[tauri::command]
+fn oliv_stop_recording<R: Runtime>(app: AppHandle<R>) {
+    crate::tray::stop_recording_handler(&app);
+}
+
 #[tauri::command]
 fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
@@ -584,6 +592,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             is_recording,
+            oliv_stop_recording,
             get_transcription_status,
             read_audio_file,
             save_transcript,

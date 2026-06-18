@@ -21,12 +21,6 @@ mod imp {
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
     use tauri::{Emitter, LogicalPosition, LogicalSize, Manager};
-    use tauri_plugin_notification::NotificationExt;
-
-    /// Grace period after a meeting app releases the mic before we auto-stop a
-    /// still-running recording (the user may have just toggled mute / a screen
-    /// briefly stole focus). Cancelled if the meeting resumes.
-    const AUTO_STOP_GRACE_SECS: u64 = 60;
 
     /// Our own bundle id — never treat the recorder's own mic use as a meeting.
     const OUR_BUNDLE: &str = "ai.oliv.recorder";
@@ -239,9 +233,10 @@ mod imp {
         );
     }
 
-    /// Position the floating prompt at the top-right of the active monitor and
-    /// show it (always-on-top, unfocused). The window lives hidden from startup,
-    /// so its webview is already loaded and listening for `meeting-detected`.
+    /// Center the floating prompt on the active monitor and show it
+    /// (always-on-top, unfocused). The window lives hidden from startup, so its
+    /// webview is already loaded and listening for `meeting-detected` /
+    /// `meeting-ended`; the event payload decides which UI it renders.
     fn show_prompt_window<R: Runtime>(app: &AppHandle<R>) {
         let Some(w) = app.get_webview_window("meeting-prompt") else {
             return;
@@ -253,46 +248,13 @@ mod imp {
             let wsize = w
                 .outer_size()
                 .map(|s| s.to_logical::<f64>(scale))
-                .unwrap_or(LogicalSize::new(340.0, 168.0));
-            let margin = 16.0;
-            let x = mpos.x + msize.width - wsize.width - margin;
-            let y = mpos.y + margin + 28.0; // clear the menubar
+                .unwrap_or(LogicalSize::new(360.0, 180.0));
+            let x = mpos.x + (msize.width - wsize.width) / 2.0;
+            let y = mpos.y + (msize.height - wsize.height) / 2.0;
             let _ = w.set_position(LogicalPosition::new(x, y));
         }
         let _ = w.set_always_on_top(true);
         let _ = w.show();
-    }
-
-    fn notify<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str) {
-        let _ = app
-            .notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show();
-    }
-
-    /// A meeting app released the mic while a recording is running. Warn, wait
-    /// out the grace period, and auto-stop unless the meeting resumed or the
-    /// user already stopped.
-    fn schedule_auto_stop<R: Runtime>(app: AppHandle<R>) {
-        tauri::async_runtime::spawn(async move {
-            if !crate::is_recording().await {
-                return;
-            }
-            notify(
-                &app,
-                "Meeting ended",
-                "Oliv is still recording — it will stop and transcribe shortly unless the meeting resumes.",
-            );
-            tokio::time::sleep(std::time::Duration::from_secs(AUTO_STOP_GRACE_SECS)).await;
-            // Re-check: still recording, and the meeting really didn't resume.
-            if crate::is_recording().await && detect().is_none() {
-                log::info!("mic_monitor: auto-stopping recording (meeting ended)");
-                crate::tray::stop_recording_handler(&app);
-                notify(&app, "Recording stopped", "Your meeting ended — transcribing now.");
-            }
-        });
     }
 
     pub fn run<R: Runtime>(app: AppHandle<R>) {
@@ -313,23 +275,38 @@ mod imp {
                     Some((name, source)) => {
                         if !present {
                             present = true;
-                            // Only prompt logged-in users — recording needs an account.
+                            // Only prompt logged-in users — transcription needs an account.
                             if crate::auth::ic_token().is_some() {
-                                log::info!("mic_monitor: meeting detected — {name} ({source})");
-                                show_prompt_window(&app);
-                                let _ = app.emit(
-                                    "meeting-detected",
-                                    serde_json::json!({ "app": name, "bundleId": source }),
-                                );
+                                let app2 = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    // Already transcribing (e.g. back-to-back call after
+                                    // "Continue") → don't re-prompt to start.
+                                    if crate::is_recording().await {
+                                        return;
+                                    }
+                                    log::info!("mic_monitor: meeting detected — {name} ({source})");
+                                    show_prompt_window(&app2);
+                                    let _ = app2.emit(
+                                        "meeting-detected",
+                                        serde_json::json!({ "app": name, "bundleId": source }),
+                                    );
+                                });
                             }
                         }
                     }
                     None => {
                         if present {
                             present = false;
-                            log::info!("mic_monitor: meeting ended");
-                            let _ = app.emit("meeting-ended", serde_json::json!({}));
-                            schedule_auto_stop(app.clone());
+                            // Mic released. If we're transcribing, show the persistent
+                            // Continue/End banner — never auto-stop, never native notify.
+                            let app2 = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if crate::is_recording().await {
+                                    log::info!("mic_monitor: meeting ended — prompting continue/end");
+                                    show_prompt_window(&app2);
+                                    let _ = app2.emit("meeting-ended", serde_json::json!({}));
+                                }
+                            });
                         }
                     }
                 }
