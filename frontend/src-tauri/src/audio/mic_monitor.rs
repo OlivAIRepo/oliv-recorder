@@ -6,11 +6,10 @@
 //! meeting-app appearance (no re-prompt spam).
 //!
 //! Whitelist: a built-in default list, overridden per-org from the middleware
-//! (`GET /api/recorder/whitelist`, refreshed periodically). Google Meet runs in
-//! a browser, so it can't be matched by bundle id alone — when `browser_meet`
-//! is enabled we additionally check whether a browser using the mic has a
-//! Meet-titled window (needs Screen Recording permission, which the app already
-//! holds for system-audio capture).
+//! (`GET /api/recorder/whitelist`, refreshed periodically). Web meetings (Google
+//! Meet, ClickUp, …) run in a browser, so when `browser_meet` is enabled any
+//! browser actively holding the mic is treated as a meeting — matched by bundle
+//! substring since the audio runs in a browser helper process.
 
 use tauri::{AppHandle, Runtime};
 
@@ -25,18 +24,23 @@ mod imp {
     /// Our own bundle id — never treat the recorder's own mic use as a meeting.
     const OUR_BUNDLE: &str = "ai.oliv.recorder";
 
-    /// Browsers that may host Google Meet. Only treated as a meeting when
-    /// `browser_meet` is on AND a Meet-titled window is present.
-    const BROWSER_BUNDLES: &[&str] = &[
-        "com.google.chrome",
-        "com.apple.safari",
-        "company.thebrowser.browser", // Arc
-        "com.microsoft.edgemac",
-        "com.brave.browser",
-        "org.chromium.chromium",
-        "com.vivaldi.vivaldi",
-        "com.operasoftware.opera",
-    ];
+    /// Friendly label for a browser holding the mic. Matched by SUBSTRING because
+    /// the mic is held by a browser *helper* process whose bundle id varies
+    /// (e.g. "com.google.Chrome.helper"). Any of these using the mic is treated
+    /// as a web meeting (Google Meet, ClickUp, etc.) when `browser_meet` is on.
+    fn browser_label(bl: &str) -> Option<&'static str> {
+        const MAP: &[(&str, &str)] = &[
+            ("chrome", "Browser meeting"),
+            ("chromium", "Browser meeting"),
+            ("safari", "Browser meeting"),
+            ("edgemac", "Browser meeting"),
+            ("brave", "Browser meeting"),
+            ("thebrowser", "Browser meeting"), // Arc
+            ("vivaldi", "Browser meeting"),
+            ("opera", "Browser meeting"),
+        ];
+        MAP.iter().find(|(k, _)| bl.contains(k)).map(|(_, v)| *v)
+    }
 
     /// Built-in fallback — must mirror the middleware default
     /// (recording_service.DEFAULT_WHITELIST_BUNDLE_IDS).
@@ -73,9 +77,11 @@ mod imp {
             .and_then(|a| a.localized_name().map(|s| s.to_string()))
     }
 
-    /// Detect an in-progress meeting from mic-input usage.
-    /// Returns (display_name, source_id) — source_id is the bundle id, or
-    /// "browser:meet" for a detected Google Meet call.
+    /// Detect an in-progress meeting from mic-input usage. Returns
+    /// (display_name, source_id). A native meeting app matches by bundle id
+    /// (exact, or a helper under it). A browser holding the mic is a web meeting
+    /// (Meet, ClickUp, …) — its audio runs in a helper process, so we match the
+    /// bundle id by substring; no window-title check is needed.
     fn detect() -> Option<(String, String)> {
         let processes = ca::System::processes().ok()?;
         let (bundle_ids, browser_meet) = {
@@ -83,7 +89,7 @@ mod imp {
             (cfg.bundle_ids.clone(), cfg.browser_meet)
         };
 
-        let mut browser_pids: Vec<i64> = Vec::new();
+        let mut browser_hit: Option<&'static str> = None;
         for p in &processes {
             if !p.is_running_input().unwrap_or(false) {
                 continue;
@@ -96,97 +102,18 @@ mod imp {
             if bl == OUR_BUNDLE {
                 continue;
             }
-            if bundle_ids.iter().any(|w| *w == bl) {
+            if bundle_ids
+                .iter()
+                .any(|w| bl == *w || bl.starts_with(&format!("{w}.")))
+            {
                 let name = app_name(p).unwrap_or_else(|| bundle.clone());
                 return Some((name, bundle));
             }
-            if browser_meet && BROWSER_BUNDLES.contains(&bl.as_str()) {
-                if let Ok(pid) = p.pid() {
-                    browser_pids.push(pid as i64);
-                }
+            if browser_meet && browser_hit.is_none() {
+                browser_hit = browser_label(&bl);
             }
         }
-
-        if !browser_pids.is_empty() && browser_has_meet_window(&browser_pids) {
-            return Some(("Google Meet".to_string(), "browser:meet".to_string()));
-        }
-        None
-    }
-
-    /// Is any window owned by one of `pids` titled like a Google Meet call?
-    /// Window titles require Screen Recording permission; without it titles are
-    /// empty and this returns false (degrades gracefully).
-    fn browser_has_meet_window(pids: &[i64]) -> bool {
-        use core_foundation::base::TCFType;
-        use core_foundation::string::CFString;
-        use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex};
-        use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
-        use core_foundation_sys::number::{kCFNumberSInt64Type, CFNumberGetValue, CFNumberRef};
-        use core_foundation_sys::string::{kCFStringEncodingUTF8, CFStringGetCString, CFStringRef};
-        use core_graphics::display::{
-            kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, CGDisplay,
-        };
-        use std::os::raw::{c_char, c_void};
-
-        let infos = match CGDisplay::window_list_info(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
-            None,
-        ) {
-            Some(a) => a,
-            None => return false,
-        };
-        // The dict-key CFStrings match by CFEqual, so we can build them by name
-        // instead of linking the kCGWindow* extern constants.
-        let pid_key = CFString::new("kCGWindowOwnerPID");
-        let name_key = CFString::new("kCGWindowName");
-        let arr = infos.as_concrete_TypeRef();
-        let count = unsafe { CFArrayGetCount(arr) };
-        for i in 0..count {
-            let dict = unsafe { CFArrayGetValueAtIndex(arr, i) } as CFDictionaryRef;
-            if dict.is_null() {
-                continue;
-            }
-            let pid_val =
-                unsafe { CFDictionaryGetValue(dict, pid_key.as_concrete_TypeRef() as *const c_void) };
-            if pid_val.is_null() {
-                continue;
-            }
-            let mut pid: i64 = 0;
-            let ok = unsafe {
-                CFNumberGetValue(
-                    pid_val as CFNumberRef,
-                    kCFNumberSInt64Type,
-                    &mut pid as *mut i64 as *mut c_void,
-                )
-            };
-            if !ok || !pids.contains(&pid) {
-                continue;
-            }
-            let name_val =
-                unsafe { CFDictionaryGetValue(dict, name_key.as_concrete_TypeRef() as *const c_void) };
-            if name_val.is_null() {
-                continue;
-            }
-            let mut buf = [0 as c_char; 512];
-            let got = unsafe {
-                CFStringGetCString(
-                    name_val as CFStringRef,
-                    buf.as_mut_ptr(),
-                    buf.len() as _,
-                    kCFStringEncodingUTF8,
-                )
-            };
-            // CFStringGetCString returns a u8 Boolean (unlike CFNumberGetValue → bool).
-            if got == 0 {
-                continue;
-            }
-            if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str() {
-                if s.to_ascii_lowercase().contains("meet") {
-                    return true;
-                }
-            }
-        }
-        false
+        browser_hit.map(|lbl| (lbl.to_string(), "browser:meeting".to_string()))
     }
 
     /// Fetch the per-org whitelist from the middleware and update CONFIG.
@@ -241,6 +168,14 @@ mod imp {
         let Some(w) = app.get_webview_window("meeting-prompt") else {
             return;
         };
+        // Remember whether the main window was visible — so closing the prompt
+        // (the app's key window) doesn't surface a previously-hidden main window.
+        let main_visible = app
+            .get_webview_window("main")
+            .and_then(|m| m.is_visible().ok())
+            .unwrap_or(false);
+        crate::MAIN_VISIBLE_BEFORE_PROMPT.store(main_visible, std::sync::atomic::Ordering::SeqCst);
+
         if let Ok(Some(monitor)) = w.current_monitor() {
             let scale = monitor.scale_factor();
             let msize = monitor.size().to_logical::<f64>(scale);
@@ -248,9 +183,10 @@ mod imp {
             let wsize = w
                 .outer_size()
                 .map(|s| s.to_logical::<f64>(scale))
-                .unwrap_or(LogicalSize::new(360.0, 180.0));
+                .unwrap_or(LogicalSize::new(380.0, 200.0));
+            // Centered horizontally, near the top of the screen (center-top).
             let x = mpos.x + (msize.width - wsize.width) / 2.0;
-            let y = mpos.y + (msize.height - wsize.height) / 2.0;
+            let y = mpos.y + 56.0;
             let _ = w.set_position(LogicalPosition::new(x, y));
         }
         let _ = w.set_always_on_top(true);

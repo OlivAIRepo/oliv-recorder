@@ -66,6 +66,10 @@ use tokio::sync::RwLock;
 
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
 
+/// Whether the main window was visible when the floating meeting-prompt was
+/// shown. Used by `close_meeting_prompt` to avoid surfacing a hidden main window.
+pub static MAIN_VISIBLE_BEFORE_PROMPT: AtomicBool = AtomicBool::new(false);
+
 // Global language preference storage (default to "auto-translate" for automatic translation to English)
 static LANGUAGE_PREFERENCE: std::sync::LazyLock<StdMutex<String>> =
     std::sync::LazyLock::new(|| StdMutex::new("auto-translate".to_string()));
@@ -248,6 +252,21 @@ async fn is_recording() -> bool {
 #[tauri::command]
 fn oliv_stop_recording<R: Runtime>(app: AppHandle<R>) {
     crate::tray::stop_recording_handler(&app);
+}
+
+/// Hide the floating meeting prompt (Dismiss / Start / Continue / End). Closing
+/// it can promote a hidden main window to the foreground, so re-hide the main
+/// window unless it was already visible when the prompt appeared.
+#[tauri::command]
+fn close_meeting_prompt<R: Runtime>(app: AppHandle<R>) {
+    if let Some(p) = app.get_webview_window("meeting-prompt") {
+        let _ = p.hide();
+    }
+    if !MAIN_VISIBLE_BEFORE_PROMPT.load(Ordering::SeqCst) {
+        if let Some(m) = app.get_webview_window("main") {
+            let _ = m.hide();
+        }
+    }
 }
 
 #[tauri::command]
@@ -593,6 +612,7 @@ pub fn run() {
             stop_recording,
             is_recording,
             oliv_stop_recording,
+            close_meeting_prompt,
             get_transcription_status,
             read_audio_file,
             save_transcript,
