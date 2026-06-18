@@ -254,17 +254,24 @@ fn oliv_stop_recording<R: Runtime>(app: AppHandle<R>) {
     crate::tray::stop_recording_handler(&app);
 }
 
-/// Hide the floating meeting prompt (Dismiss / Start / Continue / End). Closing
-/// it can promote a hidden main window to the foreground, so re-hide the main
-/// window unless it was already visible when the prompt appeared.
+/// Hide the floating meeting prompt (Dismiss / Start / Continue). Clicking the
+/// prompt activates our app, which would surface the main window; hide the whole
+/// app afterwards so focus returns to wherever the user was (Zoom/Chrome/…).
 #[tauri::command]
 fn close_meeting_prompt<R: Runtime>(app: AppHandle<R>) {
     if let Some(p) = app.get_webview_window("meeting-prompt") {
         let _ = p.hide();
     }
-    if !MAIN_VISIBLE_BEFORE_PROMPT.load(Ordering::SeqCst) {
-        if let Some(m) = app.get_webview_window("main") {
-            let _ = m.hide();
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.hide();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if !MAIN_VISIBLE_BEFORE_PROMPT.load(Ordering::SeqCst) {
+            if let Some(m) = app.get_webview_window("main") {
+                let _ = m.hide();
+            }
         }
     }
 }
