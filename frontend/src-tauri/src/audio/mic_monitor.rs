@@ -24,22 +24,17 @@ mod imp {
     /// Our own bundle id — never treat the recorder's own mic use as a meeting.
     const OUR_BUNDLE: &str = "ai.oliv.recorder";
 
-    /// Friendly label for a browser holding the mic. Matched by SUBSTRING because
-    /// the mic is held by a browser *helper* process whose bundle id varies
-    /// (e.g. "com.google.Chrome.helper"). Any of these using the mic is treated
-    /// as a web meeting (Google Meet, ClickUp, etc.) when `browser_meet` is on.
-    fn browser_label(bl: &str) -> Option<&'static str> {
-        const MAP: &[(&str, &str)] = &[
-            ("chrome", "Browser meeting"),
-            ("chromium", "Browser meeting"),
-            ("safari", "Browser meeting"),
-            ("edgemac", "Browser meeting"),
-            ("brave", "Browser meeting"),
-            ("thebrowser", "Browser meeting"), // Arc
-            ("vivaldi", "Browser meeting"),
-            ("opera", "Browser meeting"),
+    /// True if `s` (a lowercased bundle id OR app name) looks like a browser.
+    /// The mic is held by a browser *helper* process whose bundle id varies
+    /// (e.g. "com.google.Chrome.helper", or none), so we also match the app name
+    /// ("Google Chrome Helper"). Any browser holding the mic is treated as a web
+    /// meeting (Google Meet, ClickUp, …) when `browser_meet` is on.
+    fn is_browser(s: &str) -> bool {
+        const KW: &[&str] = &[
+            "chrome", "chromium", "safari", "edge", "brave", "thebrowser", "vivaldi",
+            "opera", "firefox", "mozilla",
         ];
-        MAP.iter().find(|(k, _)| bl.contains(k)).map(|(_, v)| *v)
+        KW.iter().any(|k| s.contains(k))
     }
 
     /// Built-in fallback — must mirror the middleware default
@@ -89,31 +84,45 @@ mod imp {
             (cfg.bundle_ids.clone(), cfg.browser_meet)
         };
 
-        let mut browser_hit: Option<&'static str> = None;
+        // Set OLIV_MIC_DEBUG=1 to log every mic-input process (pid/bundle/name)
+        // each cycle — used to diagnose which process holds the mic for a given
+        // app (e.g. Chrome's audio helper) so detection can be matched precisely.
+        let debug = std::env::var("OLIV_MIC_DEBUG").is_ok();
+
+        let mut browser_hit = false;
         for p in &processes {
             if !p.is_running_input().unwrap_or(false) {
                 continue;
             }
-            let bundle = match p.bundle_id() {
-                Ok(b) => b.to_string(),
-                Err(_) => continue,
-            };
+            let bundle = p.bundle_id().map(|b| b.to_string()).unwrap_or_default();
             let bl = bundle.to_ascii_lowercase();
+            let name = app_name(p).unwrap_or_default();
+            let nl = name.to_ascii_lowercase();
+            if debug {
+                log::info!(
+                    "mic_monitor[debug]: mic-input pid={:?} bundle='{bundle}' name='{name}'",
+                    p.pid().ok()
+                );
+            }
             if bl == OUR_BUNDLE {
                 continue;
             }
-            if bundle_ids
-                .iter()
-                .any(|w| bl == *w || bl.starts_with(&format!("{w}.")))
+            if !bl.is_empty()
+                && bundle_ids
+                    .iter()
+                    .any(|w| bl == *w || bl.starts_with(&format!("{w}.")))
             {
-                let name = app_name(p).unwrap_or_else(|| bundle.clone());
-                return Some((name, bundle));
+                let disp = if name.is_empty() { bundle.clone() } else { name };
+                return Some((disp, bundle));
             }
-            if browser_meet && browser_hit.is_none() {
-                browser_hit = browser_label(&bl);
+            if browser_meet && (is_browser(&bl) || is_browser(&nl)) {
+                browser_hit = true;
             }
         }
-        browser_hit.map(|lbl| (lbl.to_string(), "browser:meeting".to_string()))
+        if browser_hit {
+            return Some(("Browser meeting".to_string(), "browser:meeting".to_string()));
+        }
+        None
     }
 
     /// Fetch the per-org whitelist from the middleware and update CONFIG.
