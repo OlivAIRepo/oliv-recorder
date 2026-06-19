@@ -186,6 +186,8 @@ whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.13.2", features = ["raw-api", "vulkan"] }
 futures-channel = "0.3.31"
+# Read the mic-in-use signal from CapabilityAccessManager (meeting detection).
+winreg = "0.52"
 
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)
