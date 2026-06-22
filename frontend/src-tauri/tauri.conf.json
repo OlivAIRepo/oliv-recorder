@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "Oliv AI",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "identifier": "ai.oliv.recorder",
     "build": {
         "frontendDist": "../out",
@@ -146,7 +146,7 @@
             }
         },
         "updater": {
-            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDQTYzMUQ3ODc5N0M4MkEKUldRcXlKZUgxekdtN09DRkVWSHNpZlJseEVOUmpNd1dDSTNaLzZ3MXJGTnY3WW1pdnlOYjBpbkIK",
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3NDQ0MDU3NzNFRThCM0IKUldRN2krNXpWMEJFTjd1T1hVK29FZnJNWU4xWHBXS1ZkYys5Y3lFVUY4YVd4bVp3NTJZcnIwVFgK",
             "endpoints": [
                 "https://github.com/OlivAIRepo/oliv-recorder/releases/latest/download/latest.json"
             ]
