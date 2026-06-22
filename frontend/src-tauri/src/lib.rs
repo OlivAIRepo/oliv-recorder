@@ -70,6 +70,10 @@ static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
 /// shown. Used by `close_meeting_prompt` to avoid surfacing a hidden main window.
 pub static MAIN_VISIBLE_BEFORE_PROMPT: AtomicBool = AtomicBool::new(false);
 
+/// Gate for a real app exit. Cmd+Q / system-quit is intercepted (the app keeps
+/// running in the menubar); only "Quit Completely" sets this true before exiting.
+pub static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
+
 // Global language preference storage (default to "auto-translate" for automatic translation to English)
 static LANGUAGE_PREFERENCE: std::sync::LazyLock<StdMutex<String>> =
     std::sync::LazyLock::new(|| StdMutex::new("auto-translate".to_string()));
@@ -864,12 +868,23 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, event| {
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                // Cmd+Q / system quit: don't terminate — keep running in the
+                // menubar and just hide the window. A real exit goes through the
+                // tray "Quit Completely", which sets ALLOW_EXIT before exiting.
+                if !ALLOW_EXIT.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                    if let Some(w) = app_handle.get_webview_window("main") {
+                        let _ = w.hide();
+                    }
+                }
+            }
             if let tauri::RunEvent::Exit = event {
                 log::info!("Application exiting, cleaning up resources...");
                 tauri::async_runtime::block_on(async {
                     // Clean up database connection and checkpoint WAL
-                    if let Some(app_state) = _app_handle.try_state::<state::AppState>() {
+                    if let Some(app_state) = app_handle.try_state::<state::AppState>() {
                         log::info!("Starting database cleanup...");
                         if let Err(e) = app_state.db_manager.cleanup().await {
                             log::error!("Failed to cleanup database: {}", e);

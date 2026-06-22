@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "Oliv AI",
-    "version": "0.3.3",
+    "version": "0.3.4",
     "identifier": "ai.oliv.recorder",
     "build": {
         "frontendDist": "../out",

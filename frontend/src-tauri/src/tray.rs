@@ -82,6 +82,8 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
                 ))
                 .show(move |confirmed| {
                     if confirmed {
+                        // Allow the real exit past the Cmd+Q interceptor.
+                        crate::ALLOW_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
                         app_clone.exit(0);
                     }
                 });
