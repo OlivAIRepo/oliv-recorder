@@ -114,7 +114,10 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
-      sign-binaries: true
+      # No Apple/Windows OS-signing certs configured yet → keep false so the
+      # build succeeds. Updater (minisign) signing is always on (TAURI_SIGNING_*),
+      # so .sig files + latest.json are still produced. Flip to true once certs exist.
+      sign-binaries: false
       asset-prefix: "meetily"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
