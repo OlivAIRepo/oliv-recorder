@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useUpdateCheck } from '@/hooks/useUpdateCheck';
 import { UpdateInfo } from '@/services/updateService';
 import { UpdateDialog } from './UpdateDialog';
@@ -10,14 +10,20 @@ import { setUpdateDialogCallback, showUpdateNotification } from './UpdateNotific
 interface UpdateCheckContextType {
   updateInfo: UpdateInfo | null;
   isChecking: boolean;
-  checkForUpdates: (force?: boolean) => Promise<void>;
+  checkForUpdates: (force?: boolean) => Promise<UpdateInfo | null>;
   showUpdateDialog: () => void;
+  /** User-initiated check (e.g. Settings button): opens the dialog directly on
+   *  an available update (no toast) and returns the result for inline feedback. */
+  checkNow: () => Promise<UpdateInfo | null>;
 }
 
 const UpdateCheckContext = createContext<UpdateCheckContextType | undefined>(undefined);
 
 export function UpdateCheckProvider({ children }: { children: React.ReactNode }) {
   const [showDialog, setShowDialog] = useState(false);
+  // True while a user-initiated check is running, so we open the dialog directly
+  // instead of showing the passive toast.
+  const interactiveRef = useRef(false);
 
   const handleShowDialog = useCallback(() => {
     setShowDialog(true);
@@ -29,10 +35,24 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
     onUpdateAvailable: (info) => {
       // Mandatory updates are handled by the blocking gate — no dismissible toast.
       if (info.mandatory) return;
-      // Optional: show notification; dialog opens when the user clicks it.
+      // User-initiated check → open the dialog directly (no redundant toast).
+      if (interactiveRef.current) {
+        setShowDialog(true);
+        return;
+      }
+      // Passive (on-launch) check → non-intrusive toast.
       showUpdateNotification(info, handleShowDialog);
     },
   });
+
+  const checkNow = useCallback(async () => {
+    interactiveRef.current = true;
+    try {
+      return await checkForUpdates(true);
+    } finally {
+      interactiveRef.current = false;
+    }
+  }, [checkForUpdates]);
 
   useEffect(() => {
     // Register the callback so UpdateNotification can trigger the dialog
@@ -60,6 +80,7 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
         isChecking,
         checkForUpdates,
         showUpdateDialog: handleShowDialog,
+        checkNow,
       }}
     >
       {children}

@@ -181,7 +181,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[500px]"
+        className="sm:max-w-[380px] p-5"
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -213,7 +213,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <div className="space-y-3 py-2">
           {!isDownloading && !error && (
             <>
               <div className="space-y-2">
@@ -274,7 +274,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:gap-2">
           {!isDownloading && !error && (
             <>
               <Button variant="outline" onClick={() => handleOpenChange(false)}>

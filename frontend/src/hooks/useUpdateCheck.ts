@@ -18,10 +18,10 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
-  const checkForUpdates = async (force = false) => {
+  const checkForUpdates = async (force = false): Promise<UpdateInfo | null> => {
     // Skip if checked recently (unless forced)
     if (!force && updateService.wasCheckedRecently()) {
-      return;
+      return null;
     }
 
     setIsChecking(true);
@@ -38,9 +38,11 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
           });
         }
       }
+      return info;
     } catch (error) {
       console.error('Failed to check for updates:', error);
       // Silently fail on startup checks to avoid disrupting user experience
+      return null;
     } finally {
       setIsChecking(false);
     }

@@ -1,13 +1,15 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, LogIn, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, LogIn, CheckCircle2, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { OLIV_LOGIN_URL } from '@/lib/olivAuth';
 import { useConfig } from '@/contexts/ConfigContext';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
+import { useUpdateCheckContext } from '@/components/UpdateCheckProvider';
 import { DeviceSelection } from '@/components/DeviceSelection';
 
 // One permission's real state + a Grant button when it's missing.
@@ -50,6 +52,20 @@ export default function SettingsPage() {
   const [account, setAccount] = useState<{ email: string } | null>(null);
   const { selectedDevices, setSelectedDevices } = useConfig();
   const { hasMicrophone, isChecking, checkPermissions } = usePermissionCheck();
+  const { checkNow, isChecking: isCheckingUpdate } = useUpdateCheckContext();
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [upToDate, setUpToDate] = useState(false);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  const handleCheckUpdates = useCallback(async () => {
+    setUpToDate(false);
+    const info = await checkNow();
+    // If an update is available the provider opens the dialog; otherwise confirm.
+    if (info && !info.available) setUpToDate(true);
+  }, [checkNow]);
   // System-audio (Core Audio tap) permission: macOS exposes no non-prompting
   // status for it, so we track whether it's been set up via a persisted flag.
   const [audioGranted, setAudioGranted] = useState(false);
@@ -217,12 +233,34 @@ export default function SettingsPage() {
           {/* Updates */}
           <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900">Updates</h2>
-            <button
-              onClick={() => window.dispatchEvent(new CustomEvent('check-updates-from-tray'))}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              Check for updates
-            </button>
+            <p className="mt-1 text-sm text-gray-500">
+              Current version{appVersion ? `: ${appVersion}` : ''}
+            </p>
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                onClick={handleCheckUpdates}
+                disabled={isCheckingUpdate}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isCheckingUpdate ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Checking…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Check for updates
+                  </>
+                )}
+              </button>
+              {upToDate && !isCheckingUpdate && (
+                <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
+                  <CheckCircle2 className="w-4 h-4" />
+                  You're on the latest version
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Reset */}
