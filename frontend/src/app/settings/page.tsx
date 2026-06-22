@@ -236,11 +236,17 @@ export default function SettingsPage() {
             <p className="mt-1 text-sm text-gray-500">
               Current version{appVersion ? `: ${appVersion}` : ''}
             </p>
-            <div className="mt-4 flex items-center gap-3">
+            <div className="mt-4">
+              {upToDate && !isCheckingUpdate && (
+                <p className="mb-2 inline-flex items-center gap-1.5 text-sm text-green-600">
+                  <CheckCircle2 className="w-4 h-4" />
+                  You're on the latest version
+                </p>
+              )}
               <button
                 onClick={handleCheckUpdates}
                 disabled={isCheckingUpdate}
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isCheckingUpdate ? (
                   <>
@@ -254,12 +260,6 @@ export default function SettingsPage() {
                   </>
                 )}
               </button>
-              {upToDate && !isCheckingUpdate && (
-                <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
-                  <CheckCircle2 className="w-4 h-4" />
-                  You're on the latest version
-                </span>
-              )}
             </div>
           </div>
 
