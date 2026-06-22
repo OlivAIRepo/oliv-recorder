@@ -187,10 +187,17 @@ fn resume_recording_handler<R: Runtime>(app: &AppHandle<R>) {
 }
 
 pub fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
+    // Tray "Stop" — surface the window to show transcription progress.
+    focus_main_window(app);
+    stop_recording_core(app);
+}
+
+/// Stop without surfacing the window — used by the meeting-ended banner so the
+/// whole stop/transcribe runs in the background (the app never comes forward).
+pub fn stop_recording_core<R: Runtime>(app: &AppHandle<R>) {
     // Immediately show stopping state
     set_tray_state(app, RecordingState::Stopping);
 
-    focus_main_window(app);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
         log::info!("Tray: Stopping recording...");

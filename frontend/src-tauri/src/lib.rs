@@ -246,12 +246,12 @@ async fn is_recording() -> bool {
     audio::recording_commands::is_recording().await
 }
 
-/// Stop transcription from the floating meeting-ended banner ("End"). Reuses the
-/// tray stop path (stops the stream + emits `recording-stop-complete` so the
-/// frontend runs its post-processing).
+/// Stop transcription from the floating meeting-ended banner ("End"). Uses the
+/// non-focusing stop so the app never comes to the foreground — the stop +
+/// transcription post-processing run in the background.
 #[tauri::command]
 fn oliv_stop_recording<R: Runtime>(app: AppHandle<R>) {
-    crate::tray::stop_recording_handler(&app);
+    crate::tray::stop_recording_core(&app);
 }
 
 /// Hide the floating meeting prompt (Dismiss / Start / Continue). Clicking the

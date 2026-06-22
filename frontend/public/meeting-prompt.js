@@ -65,12 +65,11 @@
     stopTimer();
     if (mode === "detect") {
       emit("start-recording-from-prompt", { app: currentApp, sensitive: sensitiveEl.checked });
-      close();
     } else {
-      // "End" → stop transcription (the stop path surfaces the app); hide prompt.
+      // "End" → stop transcription in the background (non-focusing stop).
       invoke("oliv_stop_recording").catch(function () {});
-      try { getCurrentWindow().hide(); } catch (e) {}
     }
+    close(); // hides the app so it never comes to the foreground
   }
 
   // Secondary (left) — detect → Dismiss, ended → Continue (keep transcribing).
