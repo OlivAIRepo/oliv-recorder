@@ -304,7 +304,15 @@ fn show_prompt_window<R: Runtime>(app: &AppHandle<R>) {
         .unwrap_or(false);
     crate::MAIN_VISIBLE_BEFORE_PROMPT.store(main_visible, std::sync::atomic::Ordering::SeqCst);
 
-    if let Ok(Some(monitor)) = w.current_monitor() {
+    // current_monitor() is None until the window has been shown once (so the
+    // first prompt would skip positioning and land top-right); fall back to the
+    // primary monitor, which is available before the first show.
+    let monitor = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
         let msize = monitor.size().to_logical::<f64>(scale);
         let mpos = monitor.position().to_logical::<f64>(scale);
