@@ -304,6 +304,42 @@ fn close_meeting_prompt<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
+/// macOS app menu: keep the Edit shortcuts (copy/cut/paste/select-all) working,
+/// but make ⌘Q a custom item that hides the window instead of the default hard
+/// terminate (which `prevent_exit` can't intercept). Other platforms get the
+/// default menu.
+fn build_app_menu<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+        let app_menu = SubmenuBuilder::new(handle, "Oliv AI")
+            .about(None)
+            .separator()
+            .hide()
+            .separator()
+            .item(
+                &MenuItemBuilder::with_id("menu_quit_hide", "Quit Oliv AI")
+                    .accelerator("Cmd+Q")
+                    .build(handle)?,
+            )
+            .build()?;
+        let edit_menu = SubmenuBuilder::new(handle, "Edit")
+            .undo()
+            .redo()
+            .separator()
+            .cut()
+            .copy()
+            .paste()
+            .select_all()
+            .build()?;
+        MenuBuilder::new(handle).items(&[&app_menu, &edit_menu]).build()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        tauri::menu::Menu::default(handle)
+    }
+}
+
 #[tauri::command]
 fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
@@ -485,6 +521,16 @@ pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
 
     tauri::Builder::default()
+        .menu(|h| build_app_menu(h))
+        .on_menu_event(|app, event| {
+            // App-menu ⌘Q (macOS) → hide the window, keep running in the menubar.
+            // Real exit is via the tray "Quit Completely".
+            if event.id().as_ref() == "menu_quit_hide" {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
