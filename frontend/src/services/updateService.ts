@@ -8,6 +8,7 @@
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface UpdateInfo {
   available: boolean;
@@ -16,6 +17,22 @@ export interface UpdateInfo {
   date?: string;
   body?: string;
   downloadUrl?: string;
+  /** True when the current version is below the published minVersion → the
+   *  update is required and the app should block until it's installed. */
+  mandatory?: boolean;
+}
+
+/** Compare dotted numeric versions ("0.3.0", "1.2.0.4"). -1 if a<b, 0, 1 if a>b. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 export interface UpdateProgress {
@@ -64,18 +81,31 @@ export class UpdateService {
       const update = await check();
 
       if (update?.available) {
+        // Forced update (Option B): current version below the published
+        // minVersion. Fetched in Rust; null/failure → not mandatory.
+        let mandatory = false;
+        try {
+          const minVersion = await invoke<string | null>('oliv_min_version');
+          if (minVersion) {
+            mandatory = compareVersions(currentVersion, minVersion) < 0;
+          }
+        } catch {
+          /* no manifest / offline → optional */
+        }
         return {
           available: true,
           currentVersion,
           version: update.version,
           date: update.date,
           body: update.body,
+          mandatory,
         };
       }
 
       return {
         available: false,
         currentVersion,
+        mandatory: false,
       };
     } catch (error) {
       console.error('Failed to check for updates:', error);

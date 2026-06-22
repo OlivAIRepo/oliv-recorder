@@ -83,6 +83,15 @@ jobs:
             console.log(`Created draft release with ID: ${data.id}`)
             return data.id
 
+      - name: Upload minVersion manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Forced-update manifest (Option B): clients below this version are
+          # required to update. Bump min-version.json before a mandatory release.
+          gh release upload "v${{ steps.get-version.outputs.version }}" min-version.json --clobber
+
   # STEP 2: Build all platforms and upload directly to release
   # Note: Linux builds are excluded from release (only macOS and Windows)
   build-all-platforms:

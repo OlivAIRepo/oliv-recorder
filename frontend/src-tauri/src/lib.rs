@@ -246,6 +246,30 @@ async fn is_recording() -> bool {
     audio::recording_commands::is_recording().await
 }
 
+/// Fetch the minimum-supported version from the latest GitHub release
+/// (`min-version.json`). Fetched in Rust so it isn't subject to the webview CSP.
+/// Returns None on any failure (no release yet, offline, etc.) → never forces.
+#[tauri::command]
+async fn oliv_min_version() -> Option<String> {
+    let url =
+        "https://github.com/OlivAIRepo/oliv-recorder/releases/latest/download/min-version.json";
+    let resp = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "Oliv AI updater")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct M {
+        #[serde(rename = "minVersion")]
+        min_version: String,
+    }
+    resp.json::<M>().await.ok().map(|m| m.min_version)
+}
+
 /// Stop transcription from the floating meeting-ended banner ("End"). Uses the
 /// non-focusing stop so the app never comes to the foreground — the stop +
 /// transcription post-processing run in the background.
@@ -620,6 +644,7 @@ pub fn run() {
             is_recording,
             oliv_stop_recording,
             close_meeting_prompt,
+            oliv_min_version,
             get_transcription_status,
             read_audio_file,
             save_transcript,

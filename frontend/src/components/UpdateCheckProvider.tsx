@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import { useUpdateCheck } from '@/hooks/useUpdateCheck';
 import { UpdateInfo } from '@/services/updateService';
 import { UpdateDialog } from './UpdateDialog';
+import { MandatoryUpdateGate } from './MandatoryUpdateGate';
 import { setUpdateDialogCallback, showUpdateNotification } from './UpdateNotification';
 
 interface UpdateCheckContextType {
@@ -26,7 +27,9 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
     checkOnMount: true,
     showNotification: true,
     onUpdateAvailable: (info) => {
-      // Show notification, dialog will be shown when user clicks notification
+      // Mandatory updates are handled by the blocking gate — no dismissible toast.
+      if (info.mandatory) return;
+      // Optional: show notification; dialog opens when the user clicks it.
       showUpdateNotification(info, handleShowDialog);
     },
   });
@@ -65,6 +68,8 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
         onOpenChange={setShowDialog}
         updateInfo={updateInfo}
       />
+      {/* Blocking gate for required (below-minVersion) updates. */}
+      <MandatoryUpdateGate updateInfo={updateInfo} />
     </UpdateCheckContext.Provider>
   );
 }
