@@ -13,68 +13,114 @@
   var btnPrimary = document.getElementById("btnPrimary");
   var btnSecondary = document.getElementById("btnSecondary");
 
+  var COUNTDOWN = 10;
   var mode = "detect"; // "detect" | "ended"
   var currentApp = "a meeting app";
+  var seconds = COUNTDOWN;
+  var timer = null;
+  var done = false;
 
-  // Close via Rust so a hidden main window isn't surfaced when the prompt hides.
+  function stopTimer() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  // Close via Rust so a hidden main window / app isn't surfaced when we hide.
   function close() {
     invoke("close_meeting_prompt").catch(function () {
       try { getCurrentWindow().hide(); } catch (e) {}
     });
   }
 
-  // --- Meeting detected: opt-in start (no countdown). Mic icon shown. ---
+  function renderSub() {
+    if (mode === "detect") {
+      subEl.innerHTML = "<b></b> · starts in <b>" + seconds + "s</b>";
+      subEl.firstChild.textContent = currentApp;
+    } else {
+      subEl.innerHTML = "Ending in <b>" + seconds + "s</b>";
+    }
+  }
+
+  function tick() {
+    seconds -= 1;
+    if (seconds <= 0) {
+      stopTimer();
+      doPrimary(); // auto-fire: detect → Start, ended → End
+    } else {
+      renderSub();
+    }
+  }
+
+  function startCountdown() {
+    seconds = COUNTDOWN;
+    done = false;
+    stopTimer();
+    renderSub();
+    timer = setInterval(tick, 1000);
+  }
+
+  // Primary (right) — the auto-fired default action.
+  function doPrimary() {
+    if (done) return;
+    done = true;
+    stopTimer();
+    if (mode === "detect") {
+      emit("start-recording-from-prompt", { app: currentApp, sensitive: sensitiveEl.checked });
+      close();
+    } else {
+      // "End" → stop transcription (the stop path surfaces the app); hide prompt.
+      invoke("oliv_stop_recording").catch(function () {});
+      try { getCurrentWindow().hide(); } catch (e) {}
+    }
+  }
+
+  // Secondary (left) — detect → Dismiss, ended → Continue (keep transcribing).
+  function doSecondary() {
+    if (done) return;
+    done = true;
+    stopTimer();
+    close();
+  }
+
+  // --- Meeting detected: 10s → auto Start. Mic-only toggle shown. ---
   function renderDetect(app) {
     mode = "detect";
     currentApp = app || "a meeting app";
     titleEl.textContent = "Meeting detected";
-    subEl.innerHTML = '<b id="app"></b>';
-    document.getElementById("app").textContent = currentApp;
     sensitiveRow.classList.remove("hidden");
     sensitiveEl.checked = false;
     btnSecondary.textContent = "Dismiss";
     btnSecondary.className = "secondary";
     btnPrimary.textContent = "Start transcription";
     btnPrimary.className = "primary";
+    startCountdown();
   }
 
-  // --- Meeting ended: persistent continue/end. No mic icon. ---
+  // --- Meeting ended: 10s → auto End. End is primary (right), Continue left. ---
   function renderEnded() {
     mode = "ended";
     titleEl.textContent = "Meeting ended";
-    subEl.innerHTML = "Keep transcribing this session?";
     sensitiveRow.classList.add("hidden");
-    btnSecondary.textContent = "End";
-    btnSecondary.className = "danger";
-    btnPrimary.textContent = "Continue";
-    btnPrimary.className = "primary";
+    btnSecondary.textContent = "Continue";
+    btnSecondary.className = "secondary";
+    btnPrimary.textContent = "End";
+    btnPrimary.className = "danger";
+    startCountdown();
   }
 
-  btnPrimary.addEventListener("click", function () {
-    if (mode === "detect") {
-      emit("start-recording-from-prompt", { app: currentApp, sensitive: sensitiveEl.checked });
-    }
-    // ended → "Continue": just keep transcribing.
-    close();
-  });
-
-  btnSecondary.addEventListener("click", function () {
-    if (mode === "ended") {
-      // "End" → stop transcription (the stop path surfaces the app to show
-      // progress); just hide this prompt.
-      invoke("oliv_stop_recording").catch(function () {});
-      try { getCurrentWindow().hide(); } catch (e) {}
-    } else {
-      // "Dismiss" → close only, never open the app.
-      close();
-    }
-  });
+  btnPrimary.addEventListener("click", doPrimary);
+  btnSecondary.addEventListener("click", doSecondary);
 
   listen("meeting-detected", function (e) {
-    var p = (e && e.payload) || {};
-    renderDetect(p.app);
+    renderDetect(((e && e.payload) || {}).app);
   });
   listen("meeting-ended", function () {
     renderEnded();
+  });
+  // A new call started while transcribing → cancel the pending auto-end.
+  listen("meeting-resumed", function () {
+    if (mode === "ended") {
+      stopTimer();
+      close();
+    }
   });
 })();

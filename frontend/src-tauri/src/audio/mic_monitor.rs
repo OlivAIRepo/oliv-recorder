@@ -342,9 +342,11 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                         if crate::auth::ic_token().is_some() {
                             let app2 = app.clone();
                             tauri::async_runtime::spawn(async move {
-                                // Already transcribing (e.g. back-to-back call after
-                                // "Continue") → don't re-prompt to start.
+                                // Already transcribing (back-to-back call) → don't
+                                // re-prompt; tell the prompt to cancel any pending
+                                // auto-end so we keep recording into the next call.
                                 if crate::is_recording().await {
+                                    let _ = app2.emit("meeting-resumed", serde_json::json!({}));
                                     return;
                                 }
                                 log::info!("mic_monitor: meeting detected — {name} ({source})");
