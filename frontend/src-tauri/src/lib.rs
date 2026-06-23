@@ -526,7 +526,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir { file_name: Some("oliv".into()) },
+                    tauri_plugin_log::TargetKind::LogDir { file_name: Some("transcription".into()) },
                 ))
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,
