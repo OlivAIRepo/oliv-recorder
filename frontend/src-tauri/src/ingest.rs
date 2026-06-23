@@ -134,11 +134,15 @@ async fn start_session(meeting_name: Option<String>) {
         });
     }
     let source_app = SOURCE_APP.lock().unwrap().clone();
+    // Sensitive meeting (mic-only): sent so the API can record it in "Provider
+    // metadata". It also explains why the system channel is absent from S3.
+    let sensitive = SENSITIVE.load(Ordering::SeqCst);
     let body = json!({
         "provider": PROVIDER_LOCAL,
         "session_id": session_id,
         "title": meeting_name,
         "source_app": source_app,
+        "sensitive": sensitive,
         "started_at": now_iso(),
     });
     if let Err(e) = post_json(&token, "session", body).await {
