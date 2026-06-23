@@ -521,6 +521,16 @@ pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
 
     tauri::Builder::default()
+        // Must be first. Ensures one instance on Windows/Linux and forwards the
+        // login deep link (olivrecorder://) into the running app via on_open_url
+        // (single-instance "deep-link" feature), instead of launching a 2nd copy.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         // File + stdout logging. Logs land in the OS log dir so they can be
         // collected from users' machines (macOS: ~/Library/Logs/ai.oliv.recorder/).
         .plugin(
@@ -684,6 +694,12 @@ pub fn run() {
                 _app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
                         crate::auth::handle_auth_callback(&auth_app, url.as_str());
+                    }
+                    // Surface the window so the user lands on Home after login.
+                    if let Some(w) = auth_app.get_webview_window("main") {
+                        let _ = w.unminimize();
+                        let _ = w.show();
+                        let _ = w.set_focus();
                     }
                 });
                 // Register the scheme at runtime for Windows/Linux dev installs;

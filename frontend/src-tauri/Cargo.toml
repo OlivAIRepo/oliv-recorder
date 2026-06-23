@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.6"
+version = "0.3.7"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -154,6 +154,10 @@ tauri-plugin-notification = "2.3.1"
 tauri-plugin-updater = "2.3.0"
 tauri-plugin-process = "2.3.0"
 tauri-plugin-deep-link = "2"
+# Single-instance is required on Windows/Linux so the olivrecorder:// login
+# callback is forwarded into the already-running app (deep-link feature) instead
+# of launching a second instance.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # File + stdout logging so user-side logs are retrievable (macOS: ~/Library/Logs/ai.oliv.recorder/).
 tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
 # OS keychain for the Oliv ic_token (macOS Keychain / Windows Credential Manager).
