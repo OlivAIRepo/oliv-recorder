@@ -66,21 +66,33 @@ export default function SettingsPage() {
     // If an update is available the provider opens the dialog; otherwise confirm.
     if (info && !info.available) setUpToDate(true);
   }, [checkNow]);
-  // System-audio (Core Audio tap) permission: macOS exposes no non-prompting
-  // status for it, so we track whether it's been set up via a persisted flag.
+  // System-audio recording permission. Prefer the real OS state (non-prompting
+  // screen/system-audio-recording preflight); fall back to the persisted flag.
+  // Using the real check fixes the case where it's granted at the OS level but a
+  // stale flag showed "Not granted".
   const [audioGranted, setAudioGranted] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const { Store } = await import('@tauri-apps/plugin-store');
-        const store = await Store.load('preferences.json');
-        setAudioGranted((await store.get<boolean>('system_audio_granted')) ?? false);
-      } catch {
-        /* store unavailable */
-      }
-    })();
+  const refreshAudioGranted = useCallback(async () => {
+    let osGranted = false;
+    try {
+      osGranted = await invoke<boolean>('check_screen_recording_permission_command');
+    } catch {
+      /* command unavailable */
+    }
+    let flag = false;
+    try {
+      const { Store } = await import('@tauri-apps/plugin-store');
+      const store = await Store.load('preferences.json');
+      flag = (await store.get<boolean>('system_audio_granted')) ?? false;
+    } catch {
+      /* store unavailable */
+    }
+    setAudioGranted(osGranted || flag);
   }, []);
+
+  useEffect(() => {
+    refreshAudioGranted();
+  }, [refreshAudioGranted]);
 
   const grantSystemAudio = async () => {
     // Starts the same Core Audio tap recording uses → triggers the correct
@@ -94,7 +106,7 @@ export default function SettingsPage() {
     } catch {
       /* store unavailable */
     }
-    setAudioGranted(ok);
+    await refreshAudioGranted();
     // Starting the Core Audio / ScreenCaptureKit tap briefly steals foreground;
     // pull our window back to front so the user lands back in Settings.
     try {

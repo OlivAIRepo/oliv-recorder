@@ -2,6 +2,12 @@ name: "Release"
 
 on:
   workflow_dispatch:
+    inputs:
+      notes:
+        description: "What's-new notes shown to users in the in-app update dialog"
+        required: false
+        type: string
+        default: ""
 
 # Prevent duplicate releases
 concurrency:
@@ -121,6 +127,7 @@ jobs:
       asset-prefix: "meetily"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
+      release-notes: ${{ inputs.notes }}
     secrets: inherit
 
   # STEP 3: Show release summary

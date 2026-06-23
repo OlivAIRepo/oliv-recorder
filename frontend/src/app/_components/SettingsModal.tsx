@@ -303,7 +303,7 @@ export function SettingsModals({
     {modals.errorAlert && (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <Alert className="max-w-md mx-4 border-red-200 bg-white shadow-xl">
-          <AlertTitle className="text-red-800">Recording Stopped</AlertTitle>
+          <AlertTitle className="text-red-800">Transcription Stopped</AlertTitle>
           <AlertDescription className="text-red-700">
             {messages.errorAlert}
             <button

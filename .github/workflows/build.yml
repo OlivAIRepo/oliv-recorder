@@ -43,6 +43,11 @@ on:
         required: false
         type: boolean
         default: false
+      release-notes:
+        description: "What's-new notes shown in the in-app updater (latest.json notes)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -604,6 +609,7 @@ jobs:
           tagName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseId: ${{ inputs.release-id }}
+          releaseBody: ${{ inputs.release-notes }}
           args: ${{ inputs.build-args }} ${{ steps.build-features.outputs.features }}
 
       - name: Upload artifacts (macOS)

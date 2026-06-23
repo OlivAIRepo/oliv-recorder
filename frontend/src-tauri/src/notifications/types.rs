@@ -115,8 +115,8 @@ impl Default for NotificationTimeout {
 impl Notification {
     pub fn recording_started(meeting_name: Option<String>) -> Self {
         let body = match meeting_name {
-            Some(name) => format!("Recording started for meeting: {}", name),
-            None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
+            Some(name) => format!("Transcribing meeting: {}", name),
+            None => "Transcription started. Please inform others in the meeting that it's being transcribed.".to_string(),
         };
 
         Notification::new("Oliv AI", body, NotificationType::RecordingStarted)
@@ -127,7 +127,7 @@ impl Notification {
     pub fn recording_stopped() -> Self {
         Notification::new(
             "Oliv AI",
-            "Recording has been stopped and saved",
+            "Transcription stopped and saved",
             NotificationType::RecordingStopped
         )
         .with_priority(NotificationPriority::Normal)
@@ -137,7 +137,7 @@ impl Notification {
     pub fn recording_paused() -> Self {
         Notification::new(
             "Oliv AI",
-            "Recording has been paused",
+            "Transcription paused",
             NotificationType::RecordingPaused
         )
         .with_priority(NotificationPriority::Normal)
@@ -147,7 +147,7 @@ impl Notification {
     pub fn recording_resumed() -> Self {
         Notification::new(
             "Oliv AI",
-            "Recording has been resumed",
+            "Transcription resumed",
             NotificationType::RecordingResumed
         )
         .with_priority(NotificationPriority::Normal)
@@ -179,7 +179,7 @@ impl Notification {
     pub fn system_error(error: impl Into<String>) -> Self {
         let error_string = error.into();
         Notification::new(
-            "Meetily Error",
+            "Oliv AI",
             error_string.clone(),
             NotificationType::SystemError(error_string)
         )

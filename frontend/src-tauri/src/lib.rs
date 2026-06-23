@@ -521,6 +521,20 @@ pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
 
     tauri::Builder::default()
+        // File + stdout logging. Logs land in the OS log dir so they can be
+        // collected from users' machines (macOS: ~/Library/Logs/ai.oliv.recorder/).
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::LogDir { file_name: Some("oliv".into()) },
+                ))
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ))
+                .level(log::LevelFilter::Info)
+                .max_file_size(5_000_000)
+                .build(),
+        )
         .menu(|h| build_app_menu(h))
         .on_menu_event(|app, event| {
             // App-menu ⌘Q (macOS) → hide the window, keep running in the menubar.

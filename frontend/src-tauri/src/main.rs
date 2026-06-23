@@ -4,13 +4,9 @@
 )]
 
 use log;
-use env_logger;
 
 fn main() {
-    std::env::set_var("RUST_LOG", "info");
-    env_logger::init();
-
-    // Async logger will be initialized lazily when first needed (after Tauri runtime starts)
+    // The logger is initialized by tauri-plugin-log (file + stdout) inside run().
     log::info!("Starting application...");
     app_lib::run();
 }

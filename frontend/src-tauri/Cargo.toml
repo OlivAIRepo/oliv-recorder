@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.5"
+version = "0.3.6"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -154,6 +154,8 @@ tauri-plugin-notification = "2.3.1"
 tauri-plugin-updater = "2.3.0"
 tauri-plugin-process = "2.3.0"
 tauri-plugin-deep-link = "2"
+# File + stdout logging so user-side logs are retrievable (macOS: ~/Library/Logs/ai.oliv.recorder/).
+tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
 # OS keychain for the Oliv ic_token (macOS Keychain / Windows Credential Manager).
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
@@ -162,7 +164,6 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 tauri = { version = "2.6.2", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png"] }
 once_cell = "1.17.1"
 objc = "0.2.7"
-tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
 anyhow = "1.0"
 time = { version = "0.3", features = ["formatting"] }
 reqwest = { version = "0.11", features = ["multipart", "json"] }
