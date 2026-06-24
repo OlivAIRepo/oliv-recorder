@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.8"
+version = "0.3.9"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"

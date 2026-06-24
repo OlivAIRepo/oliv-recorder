@@ -111,19 +111,21 @@ jobs:
           - platform: "macos-latest" # for Apple Silicon only (M1 and above)
             args: "--target aarch64-apple-darwin"
             target: "aarch64-apple-darwin"
+            sign: true   # Developer ID codesign + notarize (Apple secrets set)
           - platform: "windows-latest"
             args: ""
             target: "x86_64-pc-windows-msvc"
+            sign: false  # no Windows Authenticode cert yet
 
     uses: ./.github/workflows/build.yml
     with:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
-      # No Apple/Windows OS-signing certs configured yet → keep false so the
-      # build succeeds. Updater (minisign) signing is always on (TAURI_SIGNING_*),
-      # so .sig files + latest.json are still produced. Flip to true once certs exist.
-      sign-binaries: false
+      # Per-platform: macOS codesigns + notarizes (Developer ID); Windows stays
+      # unsigned until an Authenticode cert exists. Updater (minisign) signing is
+      # always on regardless, so .sig + latest.json are produced for both.
+      sign-binaries: ${{ matrix.sign }}
       asset-prefix: "meetily"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
