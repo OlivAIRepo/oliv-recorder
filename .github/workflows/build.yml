@@ -585,6 +585,9 @@ jobs:
 
       - name: Build with Tauri
         id: tauri-build
+        # Bound the step so a hung Apple notarization can't block the runner for
+        # hours (notarytool --wait can stall on Apple's notary service).
+        timeout-minutes: 45
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
