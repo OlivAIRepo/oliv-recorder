@@ -470,13 +470,10 @@ jobs:
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
           echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
           echo "Certificate imported: $CERT_ID"
-          # Export notarization creds to the job env ONLY for signed builds, so the
-          # tauri build step doesn't see empty APPLE_* vars on unsigned builds (an
-          # empty APPLE_TEAM_ID triggers a notarization attempt that fails).
-          echo "APPLE_ID=$APPLE_ID" >> $GITHUB_ENV
-          echo "APPLE_ID_PASSWORD=$APPLE_ID_PASSWORD" >> $GITHUB_ENV
-          echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> $GITHUB_ENV
-          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> $GITHUB_ENV
+          # NOTE: notarization creds are deliberately NOT exported to the tauri
+          # build env. Tauri only codesigns here (fast/reliable); notarization +
+          # stapling happens in a separate, bounded, retryable step after the
+          # build (notarytool --wait can hang inside the build otherwise).
 
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
@@ -614,6 +611,39 @@ jobs:
           releaseId: ${{ inputs.release-id }}
           releaseBody: ${{ inputs.release-notes }}
           args: ${{ inputs.build-args }} ${{ steps.build-features.outputs.features }}
+
+      # Notarize + staple the DMG separately from the build: bounded (--timeout)
+      # and retryable so a slow/wedged Apple notary service can't hang the build
+      # for 45 min. Non-fatal — if notarization can't complete, we still ship the
+      # codesigned (un-stapled) DMG that tauri-action already uploaded.
+      - name: Notarize & staple (macOS)
+        if: contains(inputs.platform, 'macos') && inputs.sign-binaries && inputs.release-id != ''
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DMG=$(ls target/${{ inputs.target }}/${{ steps.build-profile.outputs.profile }}/bundle/dmg/*.dmg | head -1)
+          echo "Notarizing $DMG"
+          ok=0
+          for i in 1 2; do
+            if xcrun notarytool submit "$DMG" \
+                 --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+                 --wait --timeout 18m; then
+              ok=1; break
+            fi
+            echo "::warning::notarize attempt $i did not complete; retrying"
+          done
+          if [ "$ok" = "1" ] && xcrun stapler staple "$DMG"; then
+            echo "Stapled notarization ticket to $DMG"
+            gh release upload "v${{ steps.get-version.outputs.version }}" "$DMG" --clobber -R ${{ github.repository }}
+            echo "Re-uploaded notarized DMG"
+          else
+            echo "::warning::notarization/stapling incomplete — leaving the codesigned (un-stapled) DMG in place"
+          fi
 
       - name: Upload artifacts (macOS)
         if: inputs.upload-artifacts && contains(inputs.platform, 'macos')
