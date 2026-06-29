@@ -20,12 +20,13 @@ export function usePermissionCheck() {
     setStatus(prev => ({ ...prev, isChecking: true, error: null }));
 
     try {
-      // Get audio devices to check for microphone and system audio availability
-      const devices = await invoke<Array<{ name: string; device_type: 'Input' | 'Output' }>>('get_audio_devices');
-
-      // Check for microphone devices (Input)
-      const inputDevices = devices.filter(d => d.device_type === 'Input');
-      const hasMicrophone = inputDevices.length > 0;
+      // Microphone permission: the REAL OS check (AVCaptureDevice authorization
+      // status), not "do input devices exist" — input devices are enumerable
+      // without mic consent, which made Settings falsely report it as granted.
+      // Non-prompting.
+      const hasMicrophone = await invoke<boolean>('check_microphone_permission_command').catch(
+        () => false
+      );
 
       // System-audio permission: the REAL OS check (Screen & System Audio
       // Recording), not "do output devices exist" — the latter is always true
@@ -34,11 +35,7 @@ export function usePermissionCheck() {
         () => false
       );
 
-      console.log('Permission check:', {
-        hasMicrophone,
-        hasSystemAudio,
-        inputDevices: inputDevices.length,
-      });
+      console.log('Permission check:', { hasMicrophone, hasSystemAudio });
 
       setStatus({
         hasMicrophone,

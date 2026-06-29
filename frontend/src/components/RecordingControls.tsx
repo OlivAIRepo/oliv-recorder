@@ -12,14 +12,6 @@ import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useParakeetReadiness } from '@/hooks/useParakeetReadiness';
 
-// "about 2 min left" style copy for the time remaining on model prep.
-const formatEta = (seconds: number | null): string | null => {
-  if (seconds == null || !isFinite(seconds) || seconds <= 0) return null;
-  if (seconds < 60) return 'less than a minute left';
-  const minutes = Math.round(seconds / 60);
-  return minutes <= 1 ? 'about a minute left' : `about ${minutes} min left`;
-};
-
 interface RecordingControlsProps {
   isRecording: boolean;
   barHeights: string[];
@@ -55,15 +47,12 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
   // Transcription model readiness — while it's still being fetched we disable
   // the start button and surface progress instead of blocking with a modal.
-  const { modelReady, isPreparing, percent, etaSeconds } =
-    useParakeetReadiness();
+  const { modelReady, isPreparing, percent } = useParakeetReadiness();
   const preparing = !modelReady && isPreparing;
-  const prepText = (() => {
-    const eta = formatEta(etaSeconds);
-    const pct = typeof percent === 'number' ? `${Math.round(percent)}%` : null;
-    const tail = [pct, eta].filter(Boolean).join(' • ');
-    return tail ? `Getting you ready… ${tail}` : 'Getting you ready…';
-  })();
+  const prepText =
+    typeof percent === 'number'
+      ? `Getting you ready… ${Math.round(percent)}%`
+      : 'Getting you ready…';
 
   const [showPlayback, setShowPlayback] = useState(false);
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
@@ -362,7 +351,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   return (
     <TooltipProvider>
       <div className="flex flex-col space-y-2">
-        <div className="flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
+        <div className="self-center flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
           {showPlayback ? (
                 <>
                   <button

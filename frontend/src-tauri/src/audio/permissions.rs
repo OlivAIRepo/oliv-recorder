@@ -29,6 +29,30 @@ pub fn check_screen_recording_permission() -> bool {
     true // Not required on other platforms
 }
 
+/// Real, non-prompting check for the microphone (TCC) permission. Mirrors the
+/// screen-recording check: queries AVCaptureDevice's authorization status rather
+/// than inferring from "do input devices exist" (input devices are enumerable
+/// without mic consent, which made Settings falsely report it as granted).
+#[cfg(target_os = "macos")]
+pub fn check_microphone_permission() -> bool {
+    use cidre::av;
+    matches!(
+        av::CaptureDevice::authorization_status_for_media_type(av::MediaType::audio()),
+        Ok(av::AuthorizationStatus::Authorized)
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_microphone_permission() -> bool {
+    true // Gated by the OS prompt at capture time on other platforms
+}
+
+/// Tauri command: non-prompting microphone permission status.
+#[tauri::command]
+pub async fn check_microphone_permission_command() -> bool {
+    check_microphone_permission()
+}
+
 /// Request Audio Capture permission from the user
 /// This will open System Settings to the Privacy & Security page
 #[cfg(target_os = "macos")]
