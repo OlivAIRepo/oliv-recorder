@@ -61,6 +61,30 @@ export function useRecordingStart(
     }
   }, []);
 
+  // Real, non-prompting microphone permission gate. Catches the case where the
+  // user revoked mic access (in System Settings) while the app was running:
+  // macOS keeps the process alive but capture yields silence, so recording
+  // "succeeds" with an empty transcript. Returns true if OK to record.
+  const ensureMicrophonePermission = useCallback(async (): Promise<boolean> => {
+    let granted = true;
+    try {
+      granted = await invoke<boolean>('check_microphone_permission_command');
+    } catch {
+      // If the check itself fails, don't block recording.
+      return true;
+    }
+    if (!granted) {
+      toast.error('Microphone access needed', {
+        description:
+          'Enable microphone access for Oliv AI in System Settings, then start again.',
+        duration: 6000,
+      });
+      // Opens the native prompt (if undetermined) or System Settings (if denied).
+      await invoke('trigger_microphone_permission').catch(() => {});
+    }
+    return granted;
+  }, []);
+
   // Check if any model is currently downloading
   const checkIfModelDownloading = useCallback(async (): Promise<boolean> => {
     try {
@@ -108,6 +132,12 @@ export function useRecordingStart(
 
       console.log('Parakeet ready - setting up meeting title and state');
 
+      // Gate on real mic permission (catches mid-session revoke).
+      if (!(await ensureMicrophonePermission())) {
+        setStatus(RecordingStatus.IDLE);
+        return;
+      }
+
       // Use the user-entered meeting name when present; otherwise a timestamp default.
       const typed = (meetingTitle || '').trim();
       const title = typed && typed !== '+ New Call' ? typed : generateMeetingTitle();
@@ -143,7 +173,7 @@ export function useRecordingStart(
       // Re-throw so RecordingControls can handle device-specific errors
       throw error;
     }
-  }, [generateMeetingTitle, meetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, selectedDevices, showModal, setStatus]);
+  }, [generateMeetingTitle, meetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, ensureMicrophonePermission, selectedDevices, showModal, setStatus]);
 
   // Check for autoStartRecording flag and start recording automatically
   useEffect(() => {
@@ -173,6 +203,13 @@ export function useRecordingStart(
               showModal?.('modelSelector', 'Transcription model setup required');
               Analytics.trackButtonClick('start_recording_blocked_missing', 'sidebar_auto');
             }
+            setStatus(RecordingStatus.IDLE);
+            setIsAutoStarting(false);
+            return;
+          }
+
+          // Gate on real mic permission (catches mid-session revoke).
+          if (!(await ensureMicrophonePermission())) {
             setStatus(RecordingStatus.IDLE);
             setIsAutoStarting(false);
             return;
@@ -228,6 +265,7 @@ export function useRecordingStart(
     setIsMeetingActive,
     checkParakeetReady,
     checkIfModelDownloading,
+    ensureMicrophonePermission,
     showModal,
     setStatus,
   ]);
@@ -261,6 +299,13 @@ export function useRecordingStart(
           showModal?.('modelSelector', 'Transcription model setup required');
           Analytics.trackButtonClick('start_recording_blocked_missing', 'sidebar_direct');
         }
+        setStatus(RecordingStatus.IDLE);
+        setIsAutoStarting(false);
+        return;
+      }
+
+      // Gate on real mic permission (catches mid-session revoke).
+      if (!(await ensureMicrophonePermission())) {
         setStatus(RecordingStatus.IDLE);
         setIsAutoStarting(false);
         return;
@@ -317,6 +362,7 @@ export function useRecordingStart(
     setIsMeetingActive,
     checkParakeetReady,
     checkIfModelDownloading,
+    ensureMicrophonePermission,
     showModal,
     setStatus,
   ]);

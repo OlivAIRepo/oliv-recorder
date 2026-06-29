@@ -73,21 +73,16 @@ export default function SettingsPage() {
   const [audioGranted, setAudioGranted] = useState(false);
 
   const refreshAudioGranted = useCallback(async () => {
+    // Trust ONLY the real OS check. A persisted "granted" flag used to be OR'd
+    // in here, but it was sticky-true across reinstalls and revokes — so it
+    // falsely reported "Granted" while capture silently produced no audio.
     let osGranted = false;
     try {
       osGranted = await invoke<boolean>('check_screen_recording_permission_command');
     } catch {
       /* command unavailable */
     }
-    let flag = false;
-    try {
-      const { Store } = await import('@tauri-apps/plugin-store');
-      const store = await Store.load('preferences.json');
-      flag = (await store.get<boolean>('system_audio_granted')) ?? false;
-    } catch {
-      /* store unavailable */
-    }
-    setAudioGranted(osGranted || flag);
+    setAudioGranted(osGranted);
   }, []);
 
   useEffect(() => {
@@ -95,18 +90,18 @@ export default function SettingsPage() {
   }, [refreshAudioGranted]);
 
   const grantSystemAudio = async () => {
-    // Starts the same Core Audio tap recording uses → triggers the correct
-    // Audio Capture prompt, so recording won't re-prompt afterwards.
-    const ok = await invoke<boolean>('trigger_system_audio_permission_command').catch(() => false);
-    try {
-      const { Store } = await import('@tauri-apps/plugin-store');
-      const store = await Store.load('preferences.json');
-      await store.set('system_audio_granted', ok);
-      await store.save();
-    } catch {
-      /* store unavailable */
-    }
+    // Starts the same Core Audio tap recording uses → triggers the Audio Capture
+    // prompt when the permission is still undetermined.
+    await invoke<boolean>('trigger_system_audio_permission_command').catch(() => false);
     await refreshAudioGranted();
+    // If it's still not granted (e.g. previously denied — macOS won't re-prompt),
+    // open System Settings so the user can enable it manually.
+    const granted = await invoke<boolean>('check_screen_recording_permission_command').catch(
+      () => false
+    );
+    if (!granted) {
+      await invoke('open_screen_recording_settings_command').catch(() => {});
+    }
     // Starting the Core Audio / ScreenCaptureKit tap briefly steals foreground;
     // pull our window back to front so the user lands back in Settings.
     try {

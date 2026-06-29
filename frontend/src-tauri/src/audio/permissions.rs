@@ -53,6 +53,32 @@ pub async fn check_microphone_permission_command() -> bool {
     check_microphone_permission()
 }
 
+/// Open System Settings to a specific Privacy pane. macOS only; no-op elsewhere.
+#[cfg(target_os = "macos")]
+pub fn open_privacy_settings(pane: &str) {
+    let _ = Command::new("open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_{pane}"
+        ))
+        .spawn();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn open_privacy_settings(_pane: &str) {}
+
+/// Tauri command: open the Microphone privacy pane (for the already-denied case,
+/// where macOS will never re-show the prompt).
+#[tauri::command]
+pub async fn open_microphone_settings_command() {
+    open_privacy_settings("Microphone");
+}
+
+/// Tauri command: open the Screen & System Audio Recording privacy pane.
+#[tauri::command]
+pub async fn open_screen_recording_settings_command() {
+    open_privacy_settings("ScreenCapture");
+}
+
 /// Request Audio Capture permission from the user
 /// This will open System Settings to the Privacy & Security page
 #[cfg(target_os = "macos")]
