@@ -52,6 +52,7 @@ export function useRecordingStop(
     flushBuffer,
     clearTranscripts,
     meetingTitle,
+    setMeetingTitle,
     markMeetingAsSaved,
   } = useTranscripts();
 
@@ -365,6 +366,9 @@ export function useRecordingStop(
       }
 
       setIsMeetingActive(false);
+      // Clear the meeting-name input so the next recording doesn't reuse the
+      // finished meeting's name (the empty sentinel renders as a blank field).
+      setMeetingTitle('+ New Call');
       // isRecording already set to false at function start
       setIsRecordingDisabled(false);
     } catch (error) {
@@ -384,6 +388,7 @@ export function useRecordingStop(
     flushBuffer,
     clearTranscripts,
     meetingTitle,
+    setMeetingTitle,
     markMeetingAsSaved,
     refetchMeetings,
     setCurrentMeeting,

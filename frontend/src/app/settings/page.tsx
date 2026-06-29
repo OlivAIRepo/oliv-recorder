@@ -89,6 +89,43 @@ export default function SettingsPage() {
     refreshAudioGranted();
   }, [refreshAudioGranted]);
 
+  const focusSelf = useCallback(async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().setFocus();
+    } catch {
+      /* not in a Tauri window */
+    }
+  }, []);
+
+  // Granting a permission sends the user to the native prompt or System Settings,
+  // which takes focus. Watch for the permission to flip to granted and pull our
+  // window back to the front, so the user lands back in the app afterwards.
+  // Bounded so it can't poll forever if they never grant it.
+  const refocusWhenGranted = useCallback(
+    (check: () => Promise<boolean>) => {
+      let ticks = 0;
+      const id = setInterval(async () => {
+        ticks += 1;
+        let granted = false;
+        try {
+          granted = await check();
+        } catch {
+          /* keep waiting */
+        }
+        if (granted) {
+          clearInterval(id);
+          await focusSelf();
+          await checkPermissions();
+          await refreshAudioGranted();
+        } else if (ticks >= 40) {
+          clearInterval(id); // ~60s
+        }
+      }, 1500);
+    },
+    [focusSelf, checkPermissions, refreshAudioGranted]
+  );
+
   const grantSystemAudio = async () => {
     // Starts the same Core Audio tap recording uses → triggers the Audio Capture
     // prompt when the permission is still undetermined.
@@ -99,16 +136,13 @@ export default function SettingsPage() {
     const granted = await invoke<boolean>('check_screen_recording_permission_command').catch(
       () => false
     );
-    if (!granted) {
+    if (granted) {
+      await focusSelf();
+    } else {
       await invoke('open_screen_recording_settings_command').catch(() => {});
-    }
-    // Starting the Core Audio / ScreenCaptureKit tap briefly steals foreground;
-    // pull our window back to front so the user lands back in Settings.
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().setFocus();
-    } catch {
-      /* not in a Tauri window */
+      refocusWhenGranted(() =>
+        invoke<boolean>('check_screen_recording_permission_command').catch(() => false)
+      );
     }
   };
 
@@ -210,7 +244,21 @@ export default function SettingsPage() {
                     granted={hasMicrophone}
                     onGrant={async () => {
                       await invoke('trigger_microphone_permission').catch(() => {});
-                      setTimeout(checkPermissions, 1000);
+                      const granted = await invoke<boolean>(
+                        'check_microphone_permission_command'
+                      ).catch(() => false);
+                      if (granted) {
+                        await focusSelf();
+                        checkPermissions();
+                      } else {
+                        // Native prompt or System Settings opened — come back
+                        // to the front once the user grants it.
+                        refocusWhenGranted(() =>
+                          invoke<boolean>('check_microphone_permission_command').catch(
+                            () => false
+                          )
+                        );
+                      }
                     }}
                   />
                   <PermissionRow
