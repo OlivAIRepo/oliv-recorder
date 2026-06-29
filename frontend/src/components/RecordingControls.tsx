@@ -10,6 +10,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { useParakeetReadiness } from '@/hooks/useParakeetReadiness';
+
+// "about 2 min left" style copy for the time remaining on model prep.
+const formatEta = (seconds: number | null): string | null => {
+  if (seconds == null || !isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 60) return 'less than a minute left';
+  const minutes = Math.round(seconds / 60);
+  return minutes <= 1 ? 'about a minute left' : `about ${minutes} min left`;
+};
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -43,6 +52,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
   const isPaused = recordingState.isPaused;
+
+  // Transcription model readiness — while it's still being fetched we disable
+  // the start button and surface progress instead of blocking with a modal.
+  const { modelReady, isPreparing, percent, etaSeconds } =
+    useParakeetReadiness();
+  const preparing = !modelReady && isPreparing;
+  const prepText = (() => {
+    const eta = formatEta(etaSeconds);
+    const pct = typeof percent === 'number' ? `${Math.round(percent)}%` : null;
+    const tail = [pct, eta].filter(Boolean).join(' • ');
+    return tail ? `Getting you ready… ${tail}` : 'Getting you ready…';
+  })();
 
   const [showPlayback, setShowPlayback] = useState(false);
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
@@ -388,11 +409,11 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             Analytics.trackButtonClick('start_recording', 'recording_controls');
                             handleStartRecording();
                           }}
-                          disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel}
-                          className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing || isValidatingModel ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
+                          disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel || preparing}
+                          className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing || isValidatingModel || preparing ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
                             } rounded-full text-white transition-colors relative`}
                         >
-                          {isValidatingModel ? (
+                          {isValidatingModel || preparing ? (
                             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                           ) : (
                             <Mic size={20} />
@@ -400,7 +421,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Start recording</p>
+                        <p>{preparing ? prepText : 'Start transcription'}</p>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
@@ -470,6 +491,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         {isValidatingModel && (
           <div className="text-xs text-gray-600 text-center mt-2">
             Validating speech recognition...
+          </div>
+        )}
+
+        {/* Model still downloading — show friendly prep status + ETA */}
+        {preparing && !isValidatingModel && (
+          <div className="text-xs text-gray-600 text-center mt-2">
+            {prepText}
           </div>
         )}
 

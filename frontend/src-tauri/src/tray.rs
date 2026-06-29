@@ -20,7 +20,7 @@ pub enum RecordingState {
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // Start with default menu, will update with actual state after initialization
     // Pass can_record=true initially, will be updated by update_tray_menu immediately
-    let menu = build_menu(app, RecordingState::Stopped, true)?;
+    let menu = build_menu(app, RecordingState::Stopped, true, None)?;
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
@@ -268,7 +268,7 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     log::info!("Tray: Setting intermediate state: {:?}", state);
     // During recording state transitions, we assume recording is allowed (we're already recording)
-    if let Ok(menu) = build_menu(app, state, true) {
+    if let Ok(menu) = build_menu(app, state, true, None) {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let result = tray.set_menu(Some(menu));
             log::info!("Tray: Intermediate state menu update result: {:?}", result);
@@ -347,7 +347,21 @@ pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
     let can_record = check_can_record(app).await;
     log::info!("Tray: can_record: {}", can_record);
 
-    if let Ok(menu) = build_menu(app, recording_state, can_record) {
+    // While recording is blocked because the model is still downloading, surface
+    // how far along that download is so the disabled menu item can show progress.
+    let prep_percent = if can_record {
+        None
+    } else {
+        match crate::parakeet_engine::commands::parakeet_get_available_models().await {
+            Ok(models) => models.iter().find_map(|m| match &m.status {
+                crate::parakeet_engine::ModelStatus::Downloading { progress } => Some(*progress),
+                _ => None,
+            }),
+            Err(_) => None,
+        }
+    };
+
+    if let Ok(menu) = build_menu(app, recording_state, can_record, prep_percent) {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let result = tray.set_menu(Some(menu));
             log::info!("Tray: Menu update result: {:?}", result);
@@ -363,13 +377,18 @@ fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     state: RecordingState,
     can_record: bool, // True if recording is allowed (onboarding complete OR transcription model ready)
+    prep_percent: Option<u8>, // Download completion while the model is still being fetched
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     let mut builder = MenuBuilder::new(app);
 
     // If recording is not allowed (during onboarding, no transcription model), show disabled message
     if !can_record {
+        let label = match prep_percent {
+            Some(percent) => format!("⏳ Getting you ready… {}%", percent),
+            None => "⏳ Getting you ready…".to_string(),
+        };
         builder = builder.item(
-            &MenuItemBuilder::new("⏳ Downloading transcription model...")
+            &MenuItemBuilder::new(label)
                 .enabled(false)
                 .build(app)?,
         );
