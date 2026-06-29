@@ -410,10 +410,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             handleStartRecording();
                           }}
                           disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel || preparing}
-                          className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing || isValidatingModel || preparing ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
+                          className={`w-12 h-12 flex items-center justify-center ${preparing
+                            ? 'bg-red-300 cursor-not-allowed'
+                            : isStarting || isProcessing || isValidatingModel
+                              ? 'bg-gray-400'
+                              : 'bg-red-500 hover:bg-red-600'
                             } rounded-full text-white transition-colors relative`}
                         >
-                          {isValidatingModel || preparing ? (
+                          {isValidatingModel ? (
                             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                           ) : (
                             <Mic size={20} />
@@ -421,7 +425,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>{preparing ? prepText : 'Start transcription'}</p>
+                        <p>Start transcription</p>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
