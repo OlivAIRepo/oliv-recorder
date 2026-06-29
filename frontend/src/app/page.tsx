@@ -6,7 +6,6 @@ import Image from 'next/image';
 import { invoke } from '@tauri-apps/api/core';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
-import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -33,7 +32,6 @@ export default function Home() {
   const recordingState = useRecordingState();
   const { status, isProcessing } = recordingState;
 
-  const { hasMicrophone } = usePermissionCheck();
   const { setIsMeetingActive, isCollapsed: sidebarCollapsed, refetchMeetings } = useSidebar();
   const { modals, messages, showModal, hideModal } = useModalState(transcriptModelConfig);
   const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(
@@ -92,7 +90,11 @@ export default function Home() {
     status === RecordingStatus.SAVING;
   const isProcessingStop = isFinishing || isProcessing;
   const nameValue = meetingTitle === '+ New Call' ? '' : meetingTitle;
-  const controlsVisible = (hasMicrophone || isRecording) && !isFinishing;
+  // Always show the start/stop control (except while finishing a recording).
+  // Mic permission is handled by the start flow itself — it triggers the OS
+  // prompt and surfaces an error if denied — so it must NOT gate the button,
+  // otherwise revoking mic access leaves the user with no control at all.
+  const controlsVisible = !isFinishing;
 
   return (
     <motion.div
