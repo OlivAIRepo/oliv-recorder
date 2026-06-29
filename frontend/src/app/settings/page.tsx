@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import { OLIV_LOGIN_URL } from '@/lib/olivAuth';
+import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { useUpdateCheckContext } from '@/components/UpdateCheckProvider';
@@ -140,6 +141,12 @@ export default function SettingsPage() {
       await focusSelf();
     } else {
       await invoke('open_screen_recording_settings_command').catch(() => {});
+      // macOS only applies the Screen & System Audio Recording grant after the
+      // app is fully restarted, so set that expectation explicitly.
+      toast.info('Enable "Oliv AI" under Screen & System Audio Recording', {
+        description: 'Then fully quit and reopen Oliv for it to take effect.',
+        duration: 8000,
+      });
       refocusWhenGranted(() =>
         invoke<boolean>('check_screen_recording_permission_command').catch(() => false)
       );

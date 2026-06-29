@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import Image from 'next/image';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,6 +17,7 @@ import { useRecordingStateSync } from '@/hooks/useRecordingStateSync';
 import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { indexedDBService } from '@/services/indexedDBService';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import { toast } from 'sonner';
 
 // Persisted per-session so the audio pipeline (sensitive => upload mic only) can read it.
@@ -41,6 +42,41 @@ export default function Home() {
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
     setIsRecordingState, setIsRecordingDisabled
   );
+
+  // Resume the transcription-model download if it's missing and not already
+  // downloading. The mic/system-audio permission grant forces a macOS
+  // quit-and-reopen, which kills an in-progress onboarding download; without
+  // this, the app reopens into a limbo state (model incomplete, nothing
+  // downloading) where the button looks ready but Start pops the download
+  // modal. Re-kicking the download here restores the "Getting you ready…" flow.
+  const resumeAttempted = useRef(false);
+  useEffect(() => {
+    if (resumeAttempted.current) return;
+    resumeAttempted.current = true;
+    (async () => {
+      try {
+        await invoke('parakeet_init').catch(() => {});
+        const hasModels = await invoke<boolean>('parakeet_has_available_models');
+        if (hasModels) return;
+        const models = await invoke<{ status: unknown }[]>(
+          'parakeet_get_available_models'
+        ).catch(() => [] as { status: unknown }[]);
+        const downloading = models.some(
+          (m) =>
+            m.status &&
+            typeof m.status === 'object' &&
+            'Downloading' in (m.status as Record<string, unknown>)
+        );
+        if (!downloading) {
+          await invoke('parakeet_download_model', {
+            modelName: DEFAULT_PARAKEET_MODEL,
+          }).catch(() => {});
+        }
+      } catch {
+        /* best-effort; the start flow still gates on model readiness */
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     Analytics.trackPageView('home');
