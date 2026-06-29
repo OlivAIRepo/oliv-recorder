@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, LogIn, CheckCircle2, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, LogIn, CheckCircle2, AlertTriangle, Loader2, RefreshCw, Info } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -48,6 +48,35 @@ function PermissionRow({
   );
 }
 
+// A permission with no reliable non-prompting status check (system audio). We
+// show an informational row + a button to manage it in System Settings rather
+// than asserting a (frequently wrong) granted/not-granted state.
+function ManagedPermissionRow({
+  label,
+  hint,
+  onManage,
+}: {
+  label: string;
+  hint: string;
+  onManage: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-sm">
+        <Info className="w-5 h-5 text-slate-400" />
+        <span className="text-gray-700">{label}</span>
+        <span className="text-gray-400">{hint}</span>
+      </div>
+      <button
+        onClick={onManage}
+        className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+      >
+        Open System Settings
+      </button>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const [account, setAccount] = useState<{ email: string } | null>(null);
@@ -67,29 +96,6 @@ export default function SettingsPage() {
     // If an update is available the provider opens the dialog; otherwise confirm.
     if (info && !info.available) setUpToDate(true);
   }, [checkNow]);
-  // System-audio recording permission. Prefer the real OS state (non-prompting
-  // screen/system-audio-recording preflight); fall back to the persisted flag.
-  // Using the real check fixes the case where it's granted at the OS level but a
-  // stale flag showed "Not granted".
-  const [audioGranted, setAudioGranted] = useState(false);
-
-  const refreshAudioGranted = useCallback(async () => {
-    // Trust ONLY the real OS check. A persisted "granted" flag used to be OR'd
-    // in here, but it was sticky-true across reinstalls and revokes — so it
-    // falsely reported "Granted" while capture silently produced no audio.
-    let osGranted = false;
-    try {
-      osGranted = await invoke<boolean>('check_screen_recording_permission_command');
-    } catch {
-      /* command unavailable */
-    }
-    setAudioGranted(osGranted);
-  }, []);
-
-  useEffect(() => {
-    refreshAudioGranted();
-  }, [refreshAudioGranted]);
-
   const focusSelf = useCallback(async () => {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -118,39 +124,25 @@ export default function SettingsPage() {
           clearInterval(id);
           await focusSelf();
           await checkPermissions();
-          await refreshAudioGranted();
         } else if (ticks >= 40) {
           clearInterval(id); // ~60s
         }
       }, 1500);
     },
-    [focusSelf, checkPermissions, refreshAudioGranted]
+    [focusSelf, checkPermissions]
   );
 
-  const grantSystemAudio = async () => {
-    // Starts the same Core Audio tap recording uses → triggers the Audio Capture
-    // prompt when the permission is still undetermined.
-    await invoke<boolean>('trigger_system_audio_permission_command').catch(() => false);
-    await refreshAudioGranted();
-    // If it's still not granted (e.g. previously denied — macOS won't re-prompt),
-    // open System Settings so the user can enable it manually.
-    const granted = await invoke<boolean>('check_screen_recording_permission_command').catch(
-      () => false
-    );
-    if (granted) {
-      await focusSelf();
-    } else {
-      await invoke('open_screen_recording_settings_command').catch(() => {});
-      // macOS only applies the Screen & System Audio Recording grant after the
-      // app is fully restarted, so set that expectation explicitly.
-      toast.info('Enable "Oliv AI" under Screen & System Audio Recording', {
-        description: 'Then fully quit and reopen Oliv for it to take effect.',
-        duration: 8000,
-      });
-      refocusWhenGranted(() =>
-        invoke<boolean>('check_screen_recording_permission_command').catch(() => false)
-      );
-    }
+  // System audio uses a Core Audio process tap, whose permission has no reliable
+  // non-prompting preflight (denial yields silence, not an error, and the
+  // screen-capture preflight reports false negatives for it). So we don't assert
+  // a granted/not-granted status — the prompt fires automatically on first
+  // capture, and this just opens System Settings for manual management.
+  const openSystemAudioSettings = async () => {
+    await invoke('open_screen_recording_settings_command').catch(() => {});
+    toast.info('Enable "Oliv AI" under Screen & System Audio Recording', {
+      description: 'Then fully quit and reopen Oliv for it to take effect.',
+      duration: 8000,
+    });
   };
 
   const refreshAccount = useCallback(() => {
@@ -268,10 +260,10 @@ export default function SettingsPage() {
                       }
                     }}
                   />
-                  <PermissionRow
+                  <ManagedPermissionRow
                     label="System audio recording"
-                    granted={audioGranted}
-                    onGrant={grantSystemAudio}
+                    hint="Manage in System Settings"
+                    onManage={openSystemAudioSettings}
                   />
                 </>
               )}
