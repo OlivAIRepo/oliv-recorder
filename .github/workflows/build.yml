@@ -116,7 +116,10 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ inputs.platform }}-${{ inputs.target }}-vulkan-v2
+          # Include the runner image version so a runner rotation (which ships a
+          # new Xcode) busts the cache automatically — stale cached build-script
+          # outputs baked in old clang/Xcode paths and broke linking (clang_rt.osx).
+          key: ${{ inputs.platform }}-${{ inputs.target }}-${{ env.ImageVersion }}-vulkan-v2
 
       - name: install dependencies (ubuntu 24.04)
         if: contains(inputs.platform, 'ubuntu-24.04')
