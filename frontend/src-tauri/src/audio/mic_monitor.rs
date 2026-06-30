@@ -291,9 +291,11 @@ fn detect() -> Option<(String, String)> {
 // ---------------------------------------------------------------------------
 
 /// Center the floating prompt near the top of the active monitor and show it
-/// (always-on-top, unfocused). The window lives hidden from startup, so its
+/// (always-on-top, focused). The window lives hidden from startup, so its
 /// webview is already listening for `meeting-detected` / `meeting-ended`; the
-/// event payload decides which UI it renders.
+/// event payload decides which UI it renders. We focus it on show so the first
+/// click lands on a button (otherwise the click only brings it to front and the
+/// user has to click twice).
 fn show_prompt_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(w) = app.get_webview_window("meeting-prompt") else {
         return;
@@ -326,6 +328,10 @@ fn show_prompt_window<R: Runtime>(app: &AppHandle<R>) {
     }
     let _ = w.set_always_on_top(true);
     let _ = w.show();
+    // Take focus so the first click hits a button rather than just activating
+    // the window. (The window is created with focus:false to avoid grabbing
+    // focus at startup; we focus it explicitly here, only when shown.)
+    let _ = w.set_focus();
 }
 
 fn run<R: Runtime>(app: AppHandle<R>) {

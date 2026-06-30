@@ -420,21 +420,6 @@ async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
 
 #[tauri::command]
 async fn trigger_microphone_permission() -> Result<bool, String> {
-    // The native mic prompt only appears when permission is NotDetermined. Once
-    // the user has denied it (e.g. toggled it off in System Settings), macOS will
-    // never re-prompt — so route to System Settings instead of silently no-op'ing.
-    #[cfg(target_os = "macos")]
-    {
-        use cidre::av;
-        match av::CaptureDevice::authorization_status_for_media_type(av::MediaType::audio()) {
-            Ok(av::AuthorizationStatus::Authorized) => return Ok(true),
-            Ok(av::AuthorizationStatus::NotDetermined) => { /* prompt via stream below */ }
-            _ => {
-                audio::permissions::open_privacy_settings("Microphone");
-                return Ok(false);
-            }
-        }
-    }
     trigger_audio_permission()
         .map_err(|e| format!("Failed to trigger microphone permission: {}", e))
 }
@@ -926,9 +911,6 @@ pub fn run() {
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,
             audio::permissions::trigger_system_audio_permission_command,
-            audio::permissions::check_microphone_permission_command,
-            audio::permissions::open_microphone_settings_command,
-            audio::permissions::open_screen_recording_settings_command,
             // Database import commands
             database::commands::check_first_launch,
             database::commands::select_legacy_database_path,

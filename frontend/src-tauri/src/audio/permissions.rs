@@ -29,56 +29,6 @@ pub fn check_screen_recording_permission() -> bool {
     true // Not required on other platforms
 }
 
-/// Real, non-prompting check for the microphone (TCC) permission. Mirrors the
-/// screen-recording check: queries AVCaptureDevice's authorization status rather
-/// than inferring from "do input devices exist" (input devices are enumerable
-/// without mic consent, which made Settings falsely report it as granted).
-#[cfg(target_os = "macos")]
-pub fn check_microphone_permission() -> bool {
-    use cidre::av;
-    matches!(
-        av::CaptureDevice::authorization_status_for_media_type(av::MediaType::audio()),
-        Ok(av::AuthorizationStatus::Authorized)
-    )
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn check_microphone_permission() -> bool {
-    true // Gated by the OS prompt at capture time on other platforms
-}
-
-/// Tauri command: non-prompting microphone permission status.
-#[tauri::command]
-pub async fn check_microphone_permission_command() -> bool {
-    check_microphone_permission()
-}
-
-/// Open System Settings to a specific Privacy pane. macOS only; no-op elsewhere.
-#[cfg(target_os = "macos")]
-pub fn open_privacy_settings(pane: &str) {
-    let _ = Command::new("open")
-        .arg(format!(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_{pane}"
-        ))
-        .spawn();
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn open_privacy_settings(_pane: &str) {}
-
-/// Tauri command: open the Microphone privacy pane (for the already-denied case,
-/// where macOS will never re-show the prompt).
-#[tauri::command]
-pub async fn open_microphone_settings_command() {
-    open_privacy_settings("Microphone");
-}
-
-/// Tauri command: open the Screen & System Audio Recording privacy pane.
-#[tauri::command]
-pub async fn open_screen_recording_settings_command() {
-    open_privacy_settings("ScreenCapture");
-}
-
 /// Request Audio Capture permission from the user
 /// This will open System Settings to the Privacy & Security page
 #[cfg(target_os = "macos")]
