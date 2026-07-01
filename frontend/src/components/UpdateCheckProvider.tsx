@@ -29,6 +29,10 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
     setShowDialog(true);
   }, []);
 
+  // Last version we surfaced a passive toast for, so periodic re-checks don't
+  // re-toast the same optional update every cycle.
+  const notifiedVersionRef = useRef<string | null>(null);
+
   const { updateInfo, isChecking, checkForUpdates } = useUpdateCheck({
     checkOnMount: true,
     showNotification: true,
@@ -40,10 +44,24 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
         setShowDialog(true);
         return;
       }
-      // Passive (on-launch) check → non-intrusive toast.
+      // Passive check → non-intrusive toast, once per version.
+      if (notifiedVersionRef.current === (info.version ?? null)) return;
+      notifiedVersionRef.current = info.version ?? null;
       showUpdateNotification(info, handleShowDialog);
     },
   });
+
+  // Re-check periodically while the app runs, so a newly-published update —
+  // especially a mandatory one — is detected without the user manually checking
+  // or restarting. The mandatory gate is driven by updateInfo, so a hit here
+  // surfaces it on its own.
+  useEffect(() => {
+    const RECHECK_MS = 60 * 60 * 1000; // hourly
+    const id = setInterval(() => {
+      checkForUpdates(true);
+    }, RECHECK_MS);
+    return () => clearInterval(id);
+  }, [checkForUpdates]);
 
   const checkNow = useCallback(async () => {
     interactiveRef.current = true;

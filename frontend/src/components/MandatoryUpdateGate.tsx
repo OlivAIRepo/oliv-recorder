@@ -66,6 +66,24 @@ export function MandatoryUpdateGate({ updateInfo }: { updateInfo: UpdateInfo | n
           You need to update to keep using Oliv AI.
         </p>
 
+        {updateInfo.body && !isUpdating && !error && (
+          <div className="mt-4 max-h-40 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 text-left">
+            <p className="mb-1 text-xs font-medium text-gray-500">What's new</p>
+            <div className="space-y-1 text-sm text-gray-700">
+              {updateInfo.body
+                .split('\n')
+                .map((line) => line.replace(/^[-*]\s*/, '').trim())
+                .filter(Boolean)
+                .map((line, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-gray-400">•</span>
+                    <span>{line}</span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
         {isUpdating && (
           <div className="mt-5">
             <div className="h-2.5 w-full rounded-full bg-gray-200">
