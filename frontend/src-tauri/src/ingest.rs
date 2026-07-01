@@ -113,6 +113,34 @@ async fn post_json(token: &str, path: &str, body: serde_json::Value) -> Result<(
     Ok(())
 }
 
+/// Like `post_json` but returns the parsed JSON response body (for endpoints
+/// that hand back data we need, e.g. the presigned upload URL).
+async fn post_json_recv(
+    token: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/recorder/{}", backend_url(), path);
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("User-Agent", USER_AGENT)
+        .header("Cookie", format!("ic_token={token}"))
+        .header("ic_token", token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("ingest POST /{path} failed: {e}"))?;
+    let status = resp.status();
+    let val = resp
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("ingest POST /{path} decode failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("ingest POST /{path} -> HTTP {status} ({val})"));
+    }
+    Ok(val)
+}
+
 async fn start_session(meeting_name: Option<String>) {
     // Resolve the token once for the whole recording (keychain read happens here only).
     let token = match crate::auth::ic_token() {
@@ -250,32 +278,121 @@ async fn end_session() {
     }
 }
 
-async fn upload_channel(token: &str, session_id: &str, channel: &str, path: &Path) -> Result<(), String> {
+/// Upload one channel's WAV via a presigned direct-to-S3 PUT, then attach the
+/// durable address. This bypasses the Cloudflare/ALB request-body limit that
+/// silently dropped large recordings on the old multipart POST path. One
+/// attempt; `upload_channel_with_retry` handles transient failures.
+///
+/// Flow (per the middleware contract):
+///   1. POST /recorder/audio/presign  -> { upload_url, s3_key, bucket, region, content_type }
+///   2. PUT the WAV straight to S3 at `upload_url` (no ic_token — auth is in the URL)
+///   3. POST /recorder/audio/attach   -> persists s3://bucket/key on the Session row
+async fn upload_channel(
+    token: &str,
+    session_id: &str,
+    channel: &str,
+    path: &Path,
+) -> Result<(), String> {
+    let filename = format!("{channel}.wav");
+
+    // 1. Presigned PUT URL.
+    let presign = post_json_recv(
+        token,
+        "audio/presign",
+        json!({
+            "session_id": session_id,
+            "channel": channel,
+            "filename": filename,
+            "content_type": "audio/wav",
+        }),
+    )
+    .await
+    .map_err(|e| format!("presign ({channel}): {e}"))?;
+
+    let field = |k: &str| {
+        presign
+            .get(k)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("presign ({channel}): missing {k}"))
+    };
+    let upload_url = field("upload_url")?.to_string();
+    let s3_key = field("s3_key")?.to_string();
+    let bucket = field("bucket")?.to_string();
+    let region = presign.get("region").and_then(|v| v.as_str()).map(String::from);
+    // Echo back the exact Content-Type the URL was signed with, or S3 rejects
+    // the PUT with 403 SignatureDoesNotMatch.
+    let signed_ct = presign
+        .get("content_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("audio/wav")
+        .to_string();
+
+    // 2. PUT the file straight to S3. Read into memory (same as the old
+    // multipart path); the failure mode we're fixing was the edge body cap,
+    // not memory. Deliberately NO ic_token header — the presigned URL carries
+    // its own auth and an extra Authorization header can make S3 reject it.
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| format!("read {}: {e}", path.display()))?;
-    let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(format!("{channel}.wav"))
-        .mime_str("audio/wav")
-        .map_err(|e| e.to_string())?;
-    let form = reqwest::multipart::Form::new()
-        .text("session_id", session_id.to_string())
-        .text("channel", channel.to_string())
-        .part("file", part);
-    let url = format!("{}/api/recorder/audio", backend_url());
     let resp = reqwest::Client::new()
-        .post(&url)
-        .header("User-Agent", USER_AGENT)
-        .header("Cookie", format!("ic_token={token}"))
-        .header("ic_token", token)
-        .multipart(form)
+        .put(&upload_url)
+        .header("Content-Type", signed_ct.as_str())
+        .body(bytes)
         .send()
         .await
-        .map_err(|e| format!("audio upload ({channel}) failed: {e}"))?;
+        .map_err(|e| format!("S3 PUT ({channel}) failed: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("audio upload ({channel}) -> HTTP {}", resp.status()));
+        return Err(format!("S3 PUT ({channel}) -> HTTP {}", resp.status()));
     }
+
+    // 3. Attach the durable address on the Session row.
+    let mut attach = json!({
+        "session_id": session_id,
+        "channel": channel,
+        "s3_key": s3_key,
+        "bucket": bucket,
+    });
+    if let Some(r) = region {
+        attach["region"] = json!(r);
+    }
+    post_json(token, "audio/attach", attach)
+        .await
+        .map_err(|e| format!("attach ({channel}): {e}"))?;
     Ok(())
+}
+
+/// Upload a channel with bounded exponential backoff. The upload happens at
+/// end-of-call, when the server may be briefly unreachable (a deploy, a network
+/// blip); retrying rides those out. If every attempt fails the WAV still lives
+/// on disk in the recording folder — it's never lost, just not uploaded.
+async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str, path: &Path) {
+    // ~112s total window across 6 attempts — covers a short deploy/outage.
+    const BACKOFF_SECS: [u64; 5] = [2, 5, 15, 30, 60];
+    let mut attempt = 0usize;
+    loop {
+        match upload_channel(token, session_id, channel, path).await {
+            Ok(()) => {
+                log::info!("ingest: uploaded {channel} channel");
+                return;
+            }
+            Err(e) if attempt < BACKOFF_SECS.len() => {
+                let delay = BACKOFF_SECS[attempt];
+                log::warn!(
+                    "ingest: {channel} upload attempt {} failed: {e}; retrying in {delay}s",
+                    attempt + 1
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                attempt += 1;
+            }
+            Err(e) => {
+                log::warn!(
+                    "ingest: {channel} upload failed after {} attempts — giving up (WAV kept on disk): {e}",
+                    attempt + 1
+                );
+                return;
+            }
+        }
+    }
 }
 
 /// Upload the cleaned channel WAV(s) from the recording folder per the sensitive
@@ -286,10 +403,7 @@ async fn upload_audio(token: &str, session_id: &str, folder: &str) {
 
     let mic = dir.join(crate::audio::channel_writer::MIC_WAV);
     if mic.exists() {
-        match upload_channel(token, session_id, "mic", &mic).await {
-            Ok(()) => log::info!("ingest: uploaded mic channel"),
-            Err(e) => log::warn!("ingest: {e}"),
-        }
+        upload_channel_with_retry(token, session_id, "mic", &mic).await;
     } else {
         log::warn!("ingest: {} not found — skipping mic upload", mic.display());
     }
@@ -300,10 +414,7 @@ async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     }
     let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
     if sys.exists() {
-        match upload_channel(token, session_id, "system", &sys).await {
-            Ok(()) => log::info!("ingest: uploaded system channel"),
-            Err(e) => log::warn!("ingest: {e}"),
-        }
+        upload_channel_with_retry(token, session_id, "system", &sys).await;
     }
 }
 
