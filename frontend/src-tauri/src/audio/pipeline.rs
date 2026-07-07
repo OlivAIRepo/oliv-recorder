@@ -863,17 +863,10 @@ impl AudioPipeline {
                             let mixed_with_gain = self.mixer.mix_window(&mic_window, &sys_window);
 
                             // STEP 3: Per-channel transcription so each segment carries the
-                            // right speaker — mic → "Me", system → "Them".
-                            // B3 echo gate: if the mic window is dominated by system echo
-                            // (far side bleeding through the speakers), suppress the mic so
-                            // the other side isn't transcribed as "Me" — the system channel
-                            // already captures it cleanly as "Them".
-                            let mic_input = if echo_dominated(&mic_clean, &sys_window, self.sample_rate) {
-                                vec![0.0f32; mic_clean.len()]
-                            } else {
-                                mic_clean
-                            };
-                            let mic_segments = self.vad_processor.process_audio(&mic_input);
+                            // right speaker — mic → "Me", system → "Them". On headphones the
+                            // channels are cleanly separated; on speakers the far side may
+                            // bleed into the mic (handled properly by AEC, not here).
+                            let mic_segments = self.vad_processor.process_audio(&mic_clean);
                             self.dispatch_segments(mic_segments, DeviceType::Microphone);
 
                             let sys_segments = self.sys_vad_processor.process_audio(&sys_window);
@@ -963,47 +956,6 @@ impl AudioPipeline {
     }
 }
 
-/// True when the mic window is dominated by system-audio echo (the far side
-/// bleeding through the speakers into the mic). Used to suppress the mic
-/// channel so the other side isn't transcribed as "Me". Cheap, bounded:
-/// normalized cross-correlation at the best small lag (the acoustic echo
-/// delay), computed over a capped prefix of the window.
-fn echo_dominated(mic: &[f32], sys: &[f32], sample_rate: u32) -> bool {
-    // Use up to ~200ms for a stable correlation estimate. The mixing window is
-    // 600ms; the old 1600-sample (33ms @48k) cap was too short → noisy.
-    let n = mic.len().min(sys.len()).min((sample_rate as usize * 200) / 1000);
-    if n < 320 {
-        return false;
-    }
-    let mic = &mic[..n];
-    let sys = &sys[..n];
-    let mic_ms: f32 = mic.iter().map(|x| x * x).sum::<f32>() / n as f32;
-    let sys_ms: f32 = sys.iter().map(|x| x * x).sum::<f32>() / n as f32;
-    // Only a concern when the far side is actually playing loud enough to bleed
-    // (sys RMS > ~0.01). If the system is quiet there's no echo source, so never
-    // suppress the mic — this protects solo-user speech from being dropped.
-    if sys_ms < 1e-4 || mic_ms < 1e-5 {
-        return false;
-    }
-    let norm = (mic_ms * sys_ms).sqrt() * n as f32; // = sqrt(Σmic²·Σsys²)
-    // Search lags up to ~12ms — covers the speaker→mic acoustic path.
-    let max_lag = ((sample_rate as usize * 12) / 1000).min(n - 1);
-    let mut best = 0.0f32;
-    for lag in 0..=max_lag {
-        let mut dot = 0.0f32;
-        for i in lag..n {
-            dot += mic[i] * sys[i - lag];
-        }
-        let c = (dot / norm).abs();
-        if c > best {
-            best = c;
-        }
-    }
-    // Measured on real recordings: acoustic bleed correlates ~0.2–0.5 (reverb
-    // spreads it), while independent speech (earphones) stays < ~0.15. 0.22
-    // catches the bulk of speaker bleed without suppressing genuine mic speech.
-    best > 0.22
-}
 
 /// Simple audio pipeline manager
 pub struct AudioPipelineManager {
