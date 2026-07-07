@@ -14,7 +14,8 @@
 //! built-in-speaker bleed cleanly). `OLIV_AEC_ENABLED` (default ON) bypasses it
 //! (raw mic passthrough) when set to "0"/"false".
 
-use sonora::{AudioProcessing, Config, EchoCanceller as Aec3Config, StreamConfig};
+use sonora::config::EchoCanceller as Aec3Config;
+use sonora::{AudioProcessing, Config, StreamConfig};
 
 fn env_bool(key: &str, default: bool) -> bool {
     match std::env::var(key) {
