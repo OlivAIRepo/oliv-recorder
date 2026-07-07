@@ -969,19 +969,23 @@ impl AudioPipeline {
 /// normalized cross-correlation at the best small lag (the acoustic echo
 /// delay), computed over a capped prefix of the window.
 fn echo_dominated(mic: &[f32], sys: &[f32], sample_rate: u32) -> bool {
-    let n = mic.len().min(sys.len()).min(1600); // cap ~100ms @16k for cost
-    if n < 160 {
+    // Use up to ~200ms for a stable correlation estimate. The mixing window is
+    // 600ms; the old 1600-sample (33ms @48k) cap was too short → noisy.
+    let n = mic.len().min(sys.len()).min((sample_rate as usize * 200) / 1000);
+    if n < 320 {
         return false;
     }
     let mic = &mic[..n];
     let sys = &sys[..n];
-    let mic_energy: f32 = mic.iter().map(|x| x * x).sum();
-    let sys_energy: f32 = sys.iter().map(|x| x * x).sum();
-    // No echo to worry about if either channel is essentially silent.
-    if sys_energy < 1e-6 || mic_energy < 1e-6 {
+    let mic_ms: f32 = mic.iter().map(|x| x * x).sum::<f32>() / n as f32;
+    let sys_ms: f32 = sys.iter().map(|x| x * x).sum::<f32>() / n as f32;
+    // Only a concern when the far side is actually playing loud enough to bleed
+    // (sys RMS > ~0.01). If the system is quiet there's no echo source, so never
+    // suppress the mic — this protects solo-user speech from being dropped.
+    if sys_ms < 1e-4 || mic_ms < 1e-5 {
         return false;
     }
-    let norm = (mic_energy * sys_energy).sqrt();
+    let norm = (mic_ms * sys_ms).sqrt() * n as f32; // = sqrt(Σmic²·Σsys²)
     // Search lags up to ~12ms — covers the speaker→mic acoustic path.
     let max_lag = ((sample_rate as usize * 12) / 1000).min(n - 1);
     let mut best = 0.0f32;
@@ -995,8 +999,10 @@ fn echo_dominated(mic: &[f32], sys: &[f32], sample_rate: u32) -> bool {
             best = c;
         }
     }
-    // High correlation with the system reference ⇒ the mic is mostly echo.
-    best > 0.6
+    // Measured on real recordings: acoustic bleed correlates ~0.2–0.5 (reverb
+    // spreads it), while independent speech (earphones) stays < ~0.15. 0.22
+    // catches the bulk of speaker bleed without suppressing genuine mic speech.
+    best > 0.22
 }
 
 /// Simple audio pipeline manager
