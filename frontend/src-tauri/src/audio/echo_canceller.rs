@@ -1,26 +1,20 @@
-//! Cross-platform acoustic echo canceller (leaky NLMS) — removes speaker bleed
-//! (the far side playing through the speakers) from the mic channel before it is
-//! written to mic.wav. The system (far-end) audio is the reference signal.
+//! Acoustic echo cancellation via WebRTC AEC3 (the `sonora` pure-Rust port) —
+//! the same echo canceller Zoom/Meet/Chrome use. Removes far-side speaker bleed
+//! (system audio playing through the speakers back into the mic) from the mic
+//! channel before it's transcribed / written to mic.wav. On headphones there's
+//! no echo, so it's effectively a no-op there.
 //!
-//! Design notes (why this shape):
-//!   * Double-talk guard is PEAK-based: near-end is flagged when |mic| rises
-//!     well above the recent reference PEAK. An earlier average-power guard
-//!     failed when the speaker was loud (the threshold scaled up so the user's
-//!     own speech wasn't detected → the filter trained on the user's voice and
-//!     cancelled IT instead of the echo). The filter only adapts during
-//!     far-end-only stretches.
-//!   * Leaky NLMS keeps the weights from blowing up (divergence = noise).
-//!   * Safety net: if a window comes out LOUDER than it went in (the filter is
-//!     diverging), reset the filter and pass the mic through unchanged. This
-//!     guarantees the AEC can never make mic.wav worse than voice+echo.
+//! `process(mic, reference)`: `mic` = near-end (your voice + echo), `reference`
+//! = far-end (system output). Returns the cleaned near-end. State (the adaptive
+//! filter + delay estimate) persists across calls. Audio is 48kHz mono; AEC3
+//! works in 10ms (480-sample) frames — the far-end (render) frame is submitted
+//! first, then the near-end (capture) frame is cleaned against it.
 //!
-//! Same code on macOS and Windows (no platform AEC). Tunable via env (read once
-//! at construction), so the echo path can be dialed in without a rebuild:
-//!   OLIV_AEC_ENABLED (default OFF; set "1"/"true" to re-enable for testing)
-//!   OLIV_AEC_TAPS    (filter length; default 4096 ≈ 85ms @48kHz)
-//!   OLIV_AEC_MU      (NLMS step size 0..1; default 0.20)
-//!   OLIV_AEC_DTD     (double-talk peak threshold; default 2.0; higher = adapt more)
-//!   OLIV_AEC_LEAK    (weight leak per update; default 0.0001)
+//! Replaces the earlier hand-rolled NLMS canceller (which couldn't beat
+//! built-in-speaker bleed cleanly). `OLIV_AEC_ENABLED` (default ON) bypasses it
+//! (raw mic passthrough) when set to "0"/"false".
+
+use sonora::{AudioProcessing, Config, EchoCanceller as Aec3Config, StreamConfig};
 
 fn env_bool(key: &str, default: bool) -> bool {
     match std::env::var(key) {
@@ -28,139 +22,82 @@ fn env_bool(key: &str, default: bool) -> bool {
         Err(_) => default,
     }
 }
-fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
-}
-fn env_f32(key: &str, default: f32) -> f32 {
-    std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
-}
 
 pub struct EchoCanceller {
-    enabled: bool,
-    taps: usize,
-    mu: f32,
-    dtd: f32,
-    leak: f32,
-    nlp_floor: f32,   // residual suppressor: output gain during far-end-only (1.0 = off)
-    w: Vec<f32>,      // adaptive filter weights
-    x_hist: Vec<f32>, // reference history, x_hist[0] = newest
-    energy: f32,      // Σ x_hist² (maintained incrementally)
-    ref_peak: f32,    // decaying peak of |reference| (recent far-end level)
-    gain: f32,        // smoothed residual-suppressor gain (attack fast, release slow)
-    hangover: u32,    // samples to keep the gate open after near-end speech
+    apm: Option<AudioProcessing>,
+    frame: usize, // samples per 10ms frame at the stream rate
 }
 
 impl EchoCanceller {
-    pub fn new() -> Self {
-        // Default OFF: the hand-rolled NLMS can't beat built-in-speaker bleed
-        // (nonlinear + reverberant residual) cleanly and risks adding artifacts.
-        // mic.wav is written raw unless explicitly re-enabled for testing.
-        let enabled = env_bool("OLIV_AEC_ENABLED", false);
-        let taps = env_usize("OLIV_AEC_TAPS", 4096).clamp(64, 32_768);
-        let mu = env_f32("OLIV_AEC_MU", 0.20).clamp(0.01, 1.0);
-        let dtd = env_f32("OLIV_AEC_DTD", 2.0).max(1.0);
-        let leak = env_f32("OLIV_AEC_LEAK", 0.0001).clamp(0.0, 0.1);
-        // Residual suppressor: how far to duck the leftover echo when only the
-        // far-end is active. 1.0 disables it; lower = more aggressive.
-        let nlp_floor = env_f32("OLIV_AEC_NLP", 0.15).clamp(0.0, 1.0);
+    /// Build an AEC3 canceller for `sample_rate` (must be 8/16/32/48 kHz — the
+    /// rates WebRTC APM supports). Passthrough if the rate is unsupported or
+    /// `OLIV_AEC_ENABLED` is off.
+    pub fn new(sample_rate: u32) -> Self {
+        let enabled = env_bool("OLIV_AEC_ENABLED", true);
+        let supported = matches!(sample_rate, 8000 | 16000 | 32000 | 48000);
+        let frame = (sample_rate as usize / 100).max(1); // 10ms
+        let apm = if enabled && supported {
+            let config = Config {
+                echo_canceller: Some(Aec3Config::default()),
+                ..Default::default()
+            };
+            Some(
+                AudioProcessing::builder()
+                    .config(config)
+                    .capture_config(StreamConfig::new(sample_rate, 1))
+                    .render_config(StreamConfig::new(sample_rate, 1))
+                    .build(),
+            )
+        } else {
+            None
+        };
         log::info!(
-            "echo_canceller: enabled={enabled} taps={taps} mu={mu} dtd={dtd} leak={leak} nlp={nlp_floor}"
+            "echo_canceller(AEC3): active={} rate={sample_rate} frame={frame} (env_enabled={enabled} supported={supported})",
+            apm.is_some()
         );
-        Self {
-            enabled,
-            taps,
-            mu,
-            dtd,
-            leak,
-            nlp_floor,
-            w: vec![0.0; taps],
-            x_hist: vec![0.0; taps],
-            energy: 0.0,
-            ref_peak: 0.0,
-            gain: 1.0,
-            hangover: 0,
-        }
-    }
-
-    fn reset(&mut self) {
-        for v in self.w.iter_mut() {
-            *v = 0.0;
-        }
+        Self { apm, frame }
     }
 
     /// Remove the echo of `reference` (far-end/system) from `mic` (near-end +
-    /// echo). `mic` and `reference` must be the same length and sample-aligned.
-    /// Returns the cleaned near-end. State persists across calls.
+    /// echo). Both must be the same length and sample-aligned. Returns the
+    /// cleaned near-end; passthrough (returns `mic`) when disabled/unsupported,
+    /// length-mismatched, or on any per-frame error.
     pub fn process(&mut self, mic: &[f32], reference: &[f32]) -> Vec<f32> {
-        if !self.enabled || mic.len() != reference.len() {
+        let f = self.frame;
+        let Some(apm) = self.apm.as_mut() else {
+            return mic.to_vec();
+        };
+        if mic.len() != reference.len() {
             return mic.to_vec();
         }
-        let n = self.taps;
-        let mut out = Vec::with_capacity(mic.len());
-        let mut sum_d2 = 0.0f32; // input energy
-        let mut sum_e2 = 0.0f32; // output energy
-
-        for i in 0..mic.len() {
-            // Slide reference history (newest at front), keep Σx² in sync.
-            let leaving = self.x_hist[n - 1];
-            self.x_hist.copy_within(0..n - 1, 1);
-            let entering = reference[i];
-            self.x_hist[0] = entering;
-            self.energy += entering * entering - leaving * leaving;
-            if self.energy < 0.0 {
-                self.energy = 0.0;
+        let n = mic.len();
+        let mut out = Vec::with_capacity(n);
+        // Fixed-size 10ms scratch frames (a short trailing frame is zero-padded).
+        let mut render_in = vec![0.0f32; f];
+        let mut render_out = vec![0.0f32; f];
+        let mut capture_in = vec![0.0f32; f];
+        let mut capture_out = vec![0.0f32; f];
+        let mut i = 0;
+        while i < n {
+            let end = (i + f).min(n);
+            let len = end - i;
+            render_in[..len].copy_from_slice(&reference[i..end]);
+            capture_in[..len].copy_from_slice(&mic[i..end]);
+            if len < f {
+                render_in[len..].fill(0.0);
+                capture_in[len..].fill(0.0);
             }
-            // Decaying peak of the far-end level (≈ recent max |reference|).
-            self.ref_peak = entering.abs().max(self.ref_peak * 0.9995);
-
-            // Predicted echo y = wᵀ·x_hist; residual e = mic − y.
-            let mut y = 0.0f32;
-            for k in 0..n {
-                y += self.w[k] * self.x_hist[k];
+            // Far-end first (updates the echo model), then clean the near-end.
+            let _ = apm.process_render_f32(&[&render_in], &mut [&mut render_out]);
+            if apm
+                .process_capture_f32(&[&capture_in], &mut [&mut capture_out])
+                .is_ok()
+            {
+                out.extend_from_slice(&capture_out[..len]);
+            } else {
+                out.extend_from_slice(&mic[i..end]);
             }
-            let d = mic[i];
-            let e = d - y;
-
-            // Peak-based double-talk guard: the near-end is active when the mic
-            // exceeds the recent far-end peak (echo alone is attenuated, so it
-            // stays below the peak). Adapt only when far-end is present and the
-            // near-end is not — never train on the user's voice.
-            let near_end = d.abs() > self.dtd * self.ref_peak;
-            if !near_end && self.energy > 1e-6 {
-                let step = self.mu * e / (self.energy + 1e-6);
-                let leak = 1.0 - self.leak;
-                for k in 0..n {
-                    self.w[k] = self.w[k] * leak + step * self.x_hist[k];
-                }
-            }
-
-            // Residual echo suppressor: when only the far-end is active (no
-            // near-end speech, even within a ~200ms hangover after it), the
-            // leftover `e` is residual echo — duck it toward `nlp_floor`. The
-            // gain opens fast when you speak and releases slowly, so your voice
-            // is never gated. Coefficients assume 48kHz.
-            if near_end {
-                self.hangover = 9600; // ~200ms @48kHz
-            } else if self.hangover > 0 {
-                self.hangover -= 1;
-            }
-            let far_end_only = self.hangover == 0 && self.ref_peak > 1e-4;
-            let target = if far_end_only { self.nlp_floor } else { 1.0 };
-            // Attack fast (open for speech), release slow (smooth duck).
-            let coef = if target > self.gain { 0.05 } else { 0.0008 };
-            self.gain += (target - self.gain) * coef;
-
-            out.push((e * self.gain).clamp(-1.0, 1.0));
-            sum_d2 += d * d;
-            sum_e2 += e * e; // safety check uses the pre-suppressor residual
-        }
-
-        // Safety net: if cancellation made this window LOUDER, the filter is
-        // diverging — reset it and pass the original mic through. Guarantees the
-        // AEC never degrades mic.wav below voice+echo.
-        if sum_e2 > sum_d2 * 1.05 {
-            self.reset();
-            return mic.to_vec();
+            i = end;
         }
         out
     }

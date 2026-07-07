@@ -792,7 +792,7 @@ impl AudioPipeline {
         // Acoustic echo canceller for the mic channel: removes the far side's
         // speaker bleed using the system audio as the reference, so mic.wav is
         // the user's voice only. State persists across windows for the recording.
-        let mut echo_canceller = super::echo_canceller::EchoCanceller::new();
+        let mut echo_canceller = super::echo_canceller::EchoCanceller::new(self.sample_rate);
 
         // CRITICAL FIX: Continue processing until channel is closed, not based on recording state
         // This ensures ALL chunks are processed during shutdown, fixing premature meeting completion
