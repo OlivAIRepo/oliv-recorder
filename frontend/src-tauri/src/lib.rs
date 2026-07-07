@@ -663,6 +663,15 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 let _ = _app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                // An Accessory app doesn't become the active app on launch, and
+                // applying the policy can drop the just-shown window behind Finder.
+                // Explicitly bring our app + main window to the front so the user
+                // lands on it right after double-clicking (instead of it opening
+                // behind whatever was frontmost).
+                if let Some(w) = _app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
             }
 
             // Clicking the window's close button hides it to the menubar instead of
