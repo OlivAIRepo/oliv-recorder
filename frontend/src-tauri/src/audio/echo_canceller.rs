@@ -64,13 +64,34 @@ impl EchoCanceller {
     /// cleaned near-end; passthrough (returns `mic`) when disabled/unsupported,
     /// length-mismatched, or on any per-frame error.
     pub fn process(&mut self, mic: &[f32], reference: &[f32]) -> Vec<f32> {
-        let f = self.frame;
-        let Some(apm) = self.apm.as_mut() else {
-            return mic.to_vec();
-        };
-        if mic.len() != reference.len() {
+        if self.apm.is_none() || mic.len() != reference.len() {
             return mic.to_vec();
         }
+        // sonora is v0.1.0 and has panicked on some frames ("slice index …").
+        // A panic here would unwind the whole audio pipeline task, skipping WAV
+        // finalize + the final transcript flush and corrupting the recording.
+        // Contain it: on panic, disable AEC for the rest of the session and pass
+        // the raw mic through, so a recording is never lost to an AEC bug.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.process_inner(mic, reference)
+        })) {
+            Ok(out) => out,
+            Err(_) => {
+                log::error!(
+                    "echo_canceller: AEC3 panicked — disabling AEC for this session, passing mic through"
+                );
+                self.apm = None;
+                mic.to_vec()
+            }
+        }
+    }
+
+    fn process_inner(&mut self, mic: &[f32], reference: &[f32]) -> Vec<f32> {
+        let f = self.frame;
+        let apm = self
+            .apm
+            .as_mut()
+            .expect("process_inner called with apm present");
         let n = mic.len();
         let mut out = Vec::with_capacity(n);
         // Fixed-size 10ms scratch frames (a short trailing frame is zero-padded).
