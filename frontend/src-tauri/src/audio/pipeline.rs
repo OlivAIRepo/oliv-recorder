@@ -11,7 +11,7 @@ use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolat
 use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
 use super::audio_processing::{audio_to_mono, LoudnessNormalizer, NoiseSuppressionProcessor, HighPassFilter};
-use super::vad::{ContinuousVadProcessor};
+use super::vad::{ContinuousVadProcessor, SpeechSegment};
 
 /// Ring buffer for synchronized audio mixing
 /// Accumulates samples from mic and system streams until we have aligned windows
@@ -681,7 +681,11 @@ pub struct AudioPipeline {
     receiver: mpsc::UnboundedReceiver<AudioChunk>,
     transcription_sender: mpsc::UnboundedSender<AudioChunk>,
     state: Arc<RecordingState>,
+    // Per-channel VAD: `vad_processor` segments the MIC (→ "Me"),
+    // `sys_vad_processor` segments SYSTEM audio (→ "Them"). Each channel is
+    // transcribed independently so segments carry the correct speaker.
     vad_processor: ContinuousVadProcessor,
+    sys_vad_processor: ContinuousVadProcessor,
     sample_rate: u32,
     chunk_id_counter: u64,
     // Performance optimization: reduce logging frequency
@@ -739,6 +743,15 @@ impl AudioPipeline {
             }
         };
 
+        // Second VAD instance for the system channel (per-channel transcription).
+        let sys_vad_processor = match ContinuousVadProcessor::new(sample_rate, redemption_time) {
+            Ok(processor) => processor,
+            Err(e) => {
+                error!("Failed to create system VAD processor: {}", e);
+                panic!("System VAD processor creation failed: {}", e);
+            }
+        };
+
         // Initialize professional audio mixing components
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
         let mixer = ProfessionalAudioMixer::new(sample_rate);
@@ -751,6 +764,7 @@ impl AudioPipeline {
             transcription_sender,
             state,
             vad_processor,
+            sys_vad_processor,
             sample_rate,
             chunk_id_counter: 0,
             // Performance optimization: reduce logging frequency
@@ -835,57 +849,35 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
-                            // Capture the cleaned channels separately (before mixing) for S3 upload.
-                            // Echo-cancel the mic against the system reference so mic.wav
-                            // carries the user's voice only, not the far side's speaker bleed.
+                            // Capture the cleaned channels separately (before mixing) for S3
+                            // upload. Echo-cancel the mic against the system reference (no-op
+                            // unless OLIV_AEC_ENABLED) so mic.wav carries the user's voice.
+                            let mic_clean = echo_canceller.process(&mic_window, &sys_window);
                             if let Some(cw) = self.channel_writer.as_mut() {
-                                let mic_clean = echo_canceller.process(&mic_window, &sys_window);
                                 cw.write_mic(&mic_clean);
                                 cw.write_system(&sys_window);
                             }
 
-                            // Simple mixing without aggressive ducking
-                            let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
+                            // Mixed stream is still produced for the playback WAV.
+                            // (Mic already normalized by EBU R128 to -23 LUFS — no post-gain.)
+                            let mixed_with_gain = self.mixer.mix_window(&mic_window, &sys_window);
 
-                            // NO POST-GAIN NEEDED: Microphone already normalized by EBU R128 to -23 LUFS
-                            // This is broadcast-standard loudness (Netflix/YouTube/Spotify level)
-                            // System audio at natural levels
-                            // Previous 2x gain was causing excessive limiting/distortion
-                            let mixed_with_gain = mixed_clean;
+                            // STEP 3: Per-channel transcription so each segment carries the
+                            // right speaker — mic → "Me", system → "Them".
+                            // B3 echo gate: if the mic window is dominated by system echo
+                            // (far side bleeding through the speakers), suppress the mic so
+                            // the other side isn't transcribed as "Me" — the system channel
+                            // already captures it cleanly as "Them".
+                            let mic_input = if echo_dominated(&mic_clean, &sys_window, self.sample_rate) {
+                                vec![0.0f32; mic_clean.len()]
+                            } else {
+                                mic_clean
+                            };
+                            let mic_segments = self.vad_processor.process_audio(&mic_input);
+                            self.dispatch_segments(mic_segments, DeviceType::Microphone);
 
-                            // STEP 3: Send mixed audio for transcription (VAD + Whisper)
-                            match self.vad_processor.process_audio(&mixed_with_gain) {
-                                Ok(speech_segments) => {
-                                    for segment in speech_segments {
-                                        let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-
-                                        if segment.samples.len() >= 800 {  // Minimum 50ms at 16kHz - matches Parakeet capability
-                                            info!("📤 Sending VAD segment: {:.1}ms, {} samples",
-                                                  duration_ms, segment.samples.len());
-
-                                            let transcription_chunk = AudioChunk {
-                                                data: segment.samples,
-                                                sample_rate: 16000,
-                                                timestamp: segment.start_timestamp_ms / 1000.0,
-                                                chunk_id: self.chunk_id_counter,
-                                                device_type: DeviceType::Microphone,  // Mixed audio
-                                            };
-
-                                            if let Err(e) = self.transcription_sender.send(transcription_chunk) {
-                                                warn!("Failed to send VAD segment: {}", e);
-                                            } else {
-                                                self.chunk_id_counter += 1;
-                                            }
-                                        } else {
-                                            debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 800)",
-                                                   duration_ms, segment.samples.len());
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("⚠️ VAD error: {}", e);
-                                }
-                            }
+                            let sys_segments = self.sys_vad_processor.process_audio(&sys_window);
+                            self.dispatch_segments(sys_segments, DeviceType::System);
 
                             // STEP 4: Send mixed audio for recording (WAV file)
                             if let Some(ref sender) = self.recording_sender_for_mixed {
@@ -927,44 +919,84 @@ impl AudioPipeline {
     fn flush_remaining_audio(&mut self) -> Result<()> {
         info!("Flushing remaining audio from pipeline (processed {} chunks)", self.processed_chunks);
 
-        // Flush any remaining audio from VAD processor and send segments to transcription
-        match self.vad_processor.flush() {
-            Ok(final_segments) => {
-                for segment in final_segments {
-                    let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-
-                    // Send segments >= 50ms (800 samples at 16kHz) - matches main pipeline filter
-                    if segment.samples.len() >= 800 {
-                        info!("📤 Sending final VAD segment to Whisper: {:.1}ms duration, {} samples",
-                              duration_ms, segment.samples.len());
-
-                        let transcription_chunk = AudioChunk {
-                            data: segment.samples,
-                            sample_rate: 16000,
-                            timestamp: segment.start_timestamp_ms / 1000.0,
-                            chunk_id: self.chunk_id_counter,
-                            device_type: DeviceType::Microphone,
-                        };
-
-                        if let Err(e) = self.transcription_sender.send(transcription_chunk) {
-                            warn!("Failed to send final VAD segment: {}", e);
-                        } else {
-                            self.chunk_id_counter += 1;
-                        }
-                    } else {
-                        info!("⏭️ Skipping short final segment: {:.1}ms ({} samples < 800)",
-                              duration_ms, segment.samples.len());
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to flush VAD processor: {}", e);
-            }
-        }
+        // Flush both per-channel VADs so trailing speech isn't lost.
+        let mic_final = self.vad_processor.flush();
+        self.dispatch_segments(mic_final, DeviceType::Microphone);
+        let sys_final = self.sys_vad_processor.flush();
+        self.dispatch_segments(sys_final, DeviceType::System);
 
         Ok(())
     }
 
+    /// Send VAD speech segments to the transcription worker, tagged with the
+    /// channel they came from (mic → "Me", system → "Them"). Segments shorter
+    /// than ~50ms are dropped (below Parakeet's useful minimum).
+    fn dispatch_segments(
+        &mut self,
+        result: Result<Vec<SpeechSegment>>,
+        device_type: DeviceType,
+    ) {
+        match result {
+            Ok(segments) => {
+                for segment in segments {
+                    let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+                    if segment.samples.len() >= 800 {
+                        let chunk = AudioChunk {
+                            data: segment.samples,
+                            sample_rate: 16000,
+                            timestamp: segment.start_timestamp_ms / 1000.0,
+                            chunk_id: self.chunk_id_counter,
+                            device_type: device_type.clone(),
+                        };
+                        if let Err(e) = self.transcription_sender.send(chunk) {
+                            warn!("Failed to send VAD segment ({:?}): {}", device_type, e);
+                        } else {
+                            self.chunk_id_counter += 1;
+                        }
+                    } else {
+                        debug!("⏭️ Dropping short VAD segment ({:?}): {:.1}ms", device_type, duration_ms);
+                    }
+                }
+            }
+            Err(e) => warn!("⚠️ VAD error ({:?}): {}", device_type, e),
+        }
+    }
+}
+
+/// True when the mic window is dominated by system-audio echo (the far side
+/// bleeding through the speakers into the mic). Used to suppress the mic
+/// channel so the other side isn't transcribed as "Me". Cheap, bounded:
+/// normalized cross-correlation at the best small lag (the acoustic echo
+/// delay), computed over a capped prefix of the window.
+fn echo_dominated(mic: &[f32], sys: &[f32], sample_rate: u32) -> bool {
+    let n = mic.len().min(sys.len()).min(1600); // cap ~100ms @16k for cost
+    if n < 160 {
+        return false;
+    }
+    let mic = &mic[..n];
+    let sys = &sys[..n];
+    let mic_energy: f32 = mic.iter().map(|x| x * x).sum();
+    let sys_energy: f32 = sys.iter().map(|x| x * x).sum();
+    // No echo to worry about if either channel is essentially silent.
+    if sys_energy < 1e-6 || mic_energy < 1e-6 {
+        return false;
+    }
+    let norm = (mic_energy * sys_energy).sqrt();
+    // Search lags up to ~12ms — covers the speaker→mic acoustic path.
+    let max_lag = ((sample_rate as usize * 12) / 1000).min(n - 1);
+    let mut best = 0.0f32;
+    for lag in 0..=max_lag {
+        let mut dot = 0.0f32;
+        for i in lag..n {
+            dot += mic[i] * sys[i - lag];
+        }
+        let c = (dot / norm).abs();
+        if c > best {
+            best = c;
+        }
+    }
+    // High correlation with the system reference ⇒ the mic is mostly echo.
+    best > 0.6
 }
 
 /// Simple audio pipeline manager

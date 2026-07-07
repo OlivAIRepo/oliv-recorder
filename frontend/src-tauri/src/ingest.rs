@@ -83,6 +83,9 @@ fn now_iso() -> String {
 struct TranscriptEvent {
     text: String,
     sequence_id: u64,
+    /// Speaker label from the capturing channel: "Me" (mic) / "Them" (system).
+    #[serde(default)]
+    source: String,
     #[serde(default)]
     is_partial: bool,
     #[serde(default)]
@@ -200,10 +203,18 @@ async fn start_session(meeting_name: Option<String>) {
 }
 
 fn segment_json(ev: &TranscriptEvent) -> serde_json::Value {
+    // Live segments are now transcribed per channel, so we carry the real
+    // speaker: mic → "Me", system → "Them". Fall back to the old generic label
+    // if an older build emits no source.
+    let (channel, speaker) = match ev.source.as_str() {
+        "Me" => ("mic", "Me"),
+        "Them" => ("system", "Them"),
+        _ => ("mixed", "Speaker"),
+    };
     json!({
         "seq": ev.sequence_id,
-        "channel": "mixed",   // live stream is the mixed transcript; per-channel comes from S3 audio
-        "speaker": "Speaker",
+        "channel": channel,
+        "speaker": speaker,
         "text": ev.text,
         "start_ms": (ev.audio_start_time * 1000.0) as i64,
         "end_ms": (ev.audio_end_time * 1000.0) as i64,
