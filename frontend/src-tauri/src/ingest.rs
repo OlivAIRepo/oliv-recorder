@@ -174,6 +174,7 @@ async fn start_session(meeting_name: Option<String>) {
         "title": meeting_name,
         "source_app": source_app,
         "sensitive": sensitive,
+        "app_version": env!("CARGO_PKG_VERSION"),
         "started_at": now_iso(),
     });
     if let Err(e) = post_json(&token, "session", body).await {
