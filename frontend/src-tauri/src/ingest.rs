@@ -426,7 +426,7 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
 }
 
 /// Upload the cleaned channel WAV(s) from the recording folder per the sensitive
-/// flag: sensitive => mic only; otherwise mic + system. Never the raw mic.
+/// flag: sensitive => mic only; otherwise mic + system + mixed. Never the raw mic.
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     let sensitive = SENSITIVE.load(Ordering::SeqCst);
     let dir = Path::new(folder);
@@ -439,12 +439,18 @@ async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     }
 
     if sensitive {
-        log::info!("ingest: sensitive meeting — system channel withheld");
+        log::info!("ingest: sensitive meeting — system + mixed channels withheld");
         return;
     }
     let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
     if sys.exists() {
         upload_channel_with_retry(token, session_id, "system", &sys).await;
+    }
+    // Mixed track (mic+system) for in-platform playback. Withheld above for
+    // sensitive meetings since it carries the other side's audio.
+    let mixed = dir.join(crate::audio::channel_writer::MIXED_WAV);
+    if mixed.exists() {
+        upload_channel_with_retry(token, session_id, "mixed", &mixed).await;
     }
 }
 

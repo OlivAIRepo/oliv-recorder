@@ -861,6 +861,11 @@ impl AudioPipeline {
                             // Mixed stream is still produced for the playback WAV.
                             // (Mic already normalized by EBU R128 to -23 LUFS — no post-gain.)
                             let mixed_with_gain = self.mixer.mix_window(&mic_window, &sys_window);
+                            // Also persist the mixed track for end-of-call upload (human
+                            // playback only — transcription stays per-channel).
+                            if let Some(cw) = self.channel_writer.as_mut() {
+                                cw.write_mixed(&mixed_with_gain);
+                            }
 
                             // STEP 3: Per-channel transcription so each segment carries the
                             // right speaker — mic → "Me", system → "Them". On headphones the
