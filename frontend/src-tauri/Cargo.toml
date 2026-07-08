@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.13"
+version = "0.3.18"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -95,6 +95,14 @@ ebur128 = "0.1"
 
 # Noise suppression - RNNoise-based neural network noise reduction
 nnnoiseless = "0.5"
+
+# Acoustic echo cancellation — pure-Rust WebRTC AEC3 (removes far-side speaker
+# bleed from the mic channel). Cross-platform, no C/C++ dependency.
+# Pinned to a git rev, NOT crates.io "0.1.0": that published build panics
+# ("slice index starts at 13 but ends at 12") ~27s into any session once the
+# adaptive FIR filter shrinks. Fixed upstream in dec6a07 (fix(aec3): prevent
+# panic when shrinking adaptive FIR filter) but never re-published.
+sonora = { git = "https://github.com/dignifiedquire/sonora", rev = "dec6a074725e82ef371a024fc45236d60f0acf52" }
 
 # Speech recognition and async utilities
 # NOTE: whisper-rs is declared in platform-specific sections below (macOS/Windows/Linux)

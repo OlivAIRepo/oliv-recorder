@@ -63,6 +63,9 @@ struct SessionState {
     // the row's creation (which can be slow on a cold middleware cache).
     ready: bool,
     buffer: Vec<serde_json::Value>,
+    // Every segment ever produced, retained so end_session can re-send the whole
+    // transcript and reconcile the server row (see end_session).
+    all_segments: Vec<serde_json::Value>,
 }
 
 static CURRENT: Mutex<Option<SessionState>> = Mutex::new(None);
@@ -162,6 +165,7 @@ async fn start_session(meeting_name: Option<String>) {
             token: token.clone(),
             ready: false,
             buffer: Vec::new(),
+            all_segments: Vec::new(),
         });
     }
     let source_app = SOURCE_APP.lock().unwrap().clone();
@@ -233,6 +237,12 @@ async fn push_segment(ev: TranscriptEvent) {
             Some(s) => {
                 s.segment_count += 1;
                 let seg = segment_json(&ev);
+                // Retain every segment so end_session can re-send the complete
+                // transcript. Live per-segment POSTs are best-effort (no retry) and
+                // the server merge is a non-atomic read-modify-write, so a dropped
+                // POST or a burst-induced lost update can leave gaps; the end-of-
+                // meeting full resend heals them.
+                s.all_segments.push(seg.clone());
                 if s.ready {
                     Some((s.session_id.clone(), s.token.clone(), seg))
                 } else {
@@ -261,21 +271,29 @@ async fn end_session() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    let (session_id, count, token, buffer) = {
+    let (session_id, count, token, all_segments) = {
         let mut cur = CURRENT.lock().unwrap();
         match cur.take() {
-            Some(s) => (s.session_id, s.segment_count, s.token, s.buffer),
+            Some(s) => (s.session_id, s.segment_count, s.token, s.all_segments),
             None => return,
         }
     };
     // Reset source tag so a subsequent manual recording isn't mislabelled.
     *SOURCE_APP.lock().unwrap() = None;
 
-    // Flush any still-buffered segments before ending.
-    if !buffer.is_empty() {
-        let body = json!({ "session_id": session_id, "segments": buffer });
+    // Re-send the complete transcript before ending so the server row is
+    // reconciled to everything we captured. This subsumes anything still buffered
+    // and heals gaps left by best-effort live POSTs (dropped POST, or a
+    // burst-induced lost update in the server's non-atomic merge). The server
+    // dedups by seq, so replaying the full set is idempotent. Must land before
+    // session/end, which stitches the session transcript downstream.
+    let total = all_segments.len();
+    if total > 0 {
+        let body = json!({ "session_id": session_id, "segments": all_segments });
         if let Err(e) = post_json(&token, "segments", body).await {
-            log::warn!("ingest: end flush failed: {e}");
+            log::warn!("ingest: final transcript reconcile failed: {e}");
+        } else {
+            log::info!("ingest: reconciled full transcript ({total} segments) for {session_id}");
         }
     }
     let body = json!({

@@ -161,47 +161,54 @@ impl ContinuousVadProcessor {
 
     /// Flush any remaining audio and return final speech segments
     pub fn flush(&mut self) -> Result<Vec<SpeechSegment>> {
-        debug!("VAD flush: in_speech={}, current_speech_len={}, buffer_len={}, speech_segments_queued={}",
-              self.in_speech, self.current_speech.len(), self.buffer.len(), self.speech_segments.len());
+        let current_energy = if self.current_speech.is_empty() {
+            0.0
+        } else {
+            self.current_speech.iter().map(|x| x.abs()).sum::<f32>() / self.current_speech.len() as f32
+        };
+        info!("VAD flush: in_speech={}, current_speech_len={} (energy {:.6}), buffer_len={}, queued={}",
+              self.in_speech, self.current_speech.len(), current_energy, self.buffer.len(), self.speech_segments.len());
 
-        let mut completed_segments = Vec::new();
-
-        // Process any remaining buffered audio
-        if !self.buffer.is_empty() {
-            let remaining = self.buffer.clone();
-            self.buffer.clear();
-
-            // Pad to chunk size if needed
-            let mut padded_chunk = remaining;
+        if self.in_speech {
+            // Mid-speech at stop: the speaker talked right up to Stop, so no trailing
+            // silence ever closed the segment. `current_speech` holds the real audio —
+            // emit it directly. Do NOT run the leftover buffer through the VAD here:
+            // zero-padding it to a full chunk makes silero fire a SpeechEnd on the
+            // *padding* and emit its own near-silent samples while clearing
+            // `current_speech`, silently dropping the final utterance (observed: the
+            // last spoken lines vanished, replaced by an empty near-silent chunk).
+            if !self.buffer.is_empty() {
+                let remaining: Vec<f32> = self.buffer.drain(..).collect();
+                self.processed_samples += remaining.len();
+                self.current_speech.extend_from_slice(&remaining);
+            }
+            if !self.current_speech.is_empty() {
+                // processed_samples / speech_start_sample count 16kHz samples (post-resample).
+                let start_ms = (self.speech_start_sample as f64 / 16000.0) * 1000.0;
+                let end_ms = (self.processed_samples as f64 / 16000.0) * 1000.0;
+                info!("VAD flush: force-emitting in-progress speech {:.0}-{:.0}ms ({} samples)",
+                      start_ms, end_ms, self.current_speech.len());
+                let samples = std::mem::take(&mut self.current_speech);
+                self.speech_segments.push_back(SpeechSegment {
+                    samples,
+                    start_timestamp_ms: start_ms,
+                    end_timestamp_ms: end_ms,
+                    confidence: 0.8, // Estimated confidence for forced end
+                });
+            }
+            self.in_speech = false;
+        } else if !self.buffer.is_empty() {
+            // Not mid-speech: run the leftover tail through the VAD to catch a short
+            // final segment. Padding is safe here — there's no in-progress speech to lose.
+            let mut padded_chunk: Vec<f32> = self.buffer.drain(..).collect();
             if padded_chunk.len() < self.chunk_size {
                 padded_chunk.resize(self.chunk_size, 0.0);
             }
-
             self.process_chunk(&padded_chunk)?;
         }
 
-        // Force end any ongoing speech
-        if self.in_speech && !self.current_speech.is_empty() {
-            // processed_samples and speech_start_sample always count 16kHz samples (post-resampling)
-            let start_ms = (self.speech_start_sample as f64 / 16000.0) * 1000.0;
-            let end_ms = (self.processed_samples as f64 / 16000.0) * 1000.0;
-
-            debug!("VAD flush: Force-ending speech - start={}ms, end={}ms, duration={}ms, samples={}",
-                  start_ms, end_ms, end_ms - start_ms, self.current_speech.len());
-
-            let segment = SpeechSegment {
-                samples: self.current_speech.clone(),
-                start_timestamp_ms: start_ms,
-                end_timestamp_ms: end_ms,
-                confidence: 0.8, // Estimated confidence for forced end
-            };
-
-            self.speech_segments.push_back(segment);
-            self.current_speech.clear();
-            self.in_speech = false;
-        }
-
-        // Extract all remaining segments
+        // Extract all remaining segments (earlier queued first, forced-end last).
+        let mut completed_segments = Vec::new();
         while let Some(segment) = self.speech_segments.pop_front() {
             completed_segments.push(segment);
         }
