@@ -1,12 +1,13 @@
-//! Captures the two cleaned audio channels (mic + system) to separate WAV files
-//! for end-of-call S3 upload.
+//! Captures the cleaned audio channels to separate WAV files for end-of-call S3
+//! upload: `mic.wav` + `system.wav` (per-channel, used to reconstruct Me/Them in
+//! transcription) plus `mixed.wav` (mic+system mixed, for human playback only).
 //!
-//! The live transcript uses the *mixed* stream; the upload uses these *separate*
-//! cleaned channels so the server can reconstruct Me/Them. We tap `mic_window`
-//! (cleaned mic) and `sys_window` (system) in the pipeline right before they are
-//! mixed — never the raw mic. Files land in the meeting folder as `mic.wav` /
-//! `system.wav`; the ingest uploads them at `recording-stopped` per the
-//! "sensitive meeting" flag (sensitive => mic only).
+//! We tap `mic_window` (cleaned mic) and `sys_window` (system) in the pipeline
+//! right before they are mixed — never the raw mic — and the mixer's output for
+//! the mixed track. Files land in the meeting folder; the ingest uploads them at
+//! `recording-stopped`. The "mixed" channel is always uploaded for playback
+//! (mic-only substitute for sensitive meetings, where the system channel and the
+//! mic+system `mixed.wav` are withheld).
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -18,6 +19,7 @@ use log::{info, warn};
 
 pub const MIC_WAV: &str = "mic.wav";
 pub const SYSTEM_WAV: &str = "system.wav";
+pub const MIXED_WAV: &str = "mixed.wav";
 
 // Set by the recording saver when it creates the meeting folder; the pipeline
 // reads it to open the channel writers for that recording.
@@ -90,11 +92,13 @@ fn write_wav_header<W: Write>(w: &mut W, sample_rate: u32, data_bytes: u32) -> R
     Ok(())
 }
 
-/// Writes mic + system channels for one recording. Writers open lazily on the
-/// first window so an unconfigured recording (no channel dir) is a no-op.
+/// Writes the mic + system channels (for per-channel transcription) plus a mixed
+/// track (for human playback) for one recording. Writers open lazily on the first
+/// window so an unconfigured recording (no channel dir) is a no-op.
 pub struct DualChannelWriter {
     mic: Option<WavWriter>,
     system: Option<WavWriter>,
+    mixed: Option<WavWriter>,
     sample_rate: u32,
     dir: PathBuf,
 }
@@ -103,8 +107,8 @@ impl DualChannelWriter {
     /// Some(..) iff a meeting folder was set for this recording.
     pub fn try_new(sample_rate: u32) -> Option<Self> {
         let dir = channel_dir()?;
-        info!("channel_writer: capturing mic/system channels into {:?}", dir);
-        Some(Self { mic: None, system: None, sample_rate, dir })
+        info!("channel_writer: capturing mic/system/mixed channels into {:?}", dir);
+        Some(Self { mic: None, system: None, mixed: None, sample_rate, dir })
     }
 
     pub fn write_mic(&mut self, samples: &[f32]) {
@@ -141,6 +145,23 @@ impl DualChannelWriter {
         }
     }
 
+    pub fn write_mixed(&mut self, samples: &[f32]) {
+        if self.mixed.is_none() {
+            match WavWriter::create(&self.dir.join(MIXED_WAV), self.sample_rate) {
+                Ok(w) => self.mixed = Some(w),
+                Err(e) => {
+                    warn!("channel_writer: failed to create {MIXED_WAV}: {e}");
+                    return;
+                }
+            }
+        }
+        if let Some(w) = self.mixed.as_mut() {
+            if let Err(e) = w.write_samples(samples) {
+                warn!("channel_writer: mixed write failed: {e}");
+            }
+        }
+    }
+
     pub fn finalize(self) {
         if let Some(w) = self.mic {
             if let Err(e) = w.finalize() {
@@ -150,6 +171,11 @@ impl DualChannelWriter {
         if let Some(w) = self.system {
             if let Err(e) = w.finalize() {
                 warn!("channel_writer: system finalize failed: {e}");
+            }
+        }
+        if let Some(w) = self.mixed {
+            if let Err(e) = w.finalize() {
+                warn!("channel_writer: mixed finalize failed: {e}");
             }
         }
         info!("channel_writer: finalized channel WAVs in {:?}", self.dir);

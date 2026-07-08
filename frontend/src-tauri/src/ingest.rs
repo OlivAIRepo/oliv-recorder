@@ -425,26 +425,40 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
     }
 }
 
-/// Upload the cleaned channel WAV(s) from the recording folder per the sensitive
-/// flag: sensitive => mic only; otherwise mic + system. Never the raw mic.
+/// Upload the cleaned channel WAV(s) from the recording folder. The "mixed"
+/// channel is always uploaded so playback has one reliable track: mic+system
+/// normally, mic-only for sensitive meetings (where the system channel is
+/// withheld). Never the raw mic.
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     let sensitive = SENSITIVE.load(Ordering::SeqCst);
     let dir = Path::new(folder);
 
     let mic = dir.join(crate::audio::channel_writer::MIC_WAV);
-    if mic.exists() {
+    let mic_exists = mic.exists();
+    if mic_exists {
         upload_channel_with_retry(token, session_id, "mic", &mic).await;
     } else {
         log::warn!("ingest: {} not found — skipping mic upload", mic.display());
     }
 
     if sensitive {
-        log::info!("ingest: sensitive meeting — system channel withheld");
+        // No other-side audio for sensitive meetings — but the "mixed" channel
+        // must always be populated so playback can rely on a single track. Use
+        // the mic WAV as the mixed/playback track (mic is the only audio anyway).
+        if mic_exists {
+            upload_channel_with_retry(token, session_id, "mixed", &mic).await;
+        }
+        log::info!("ingest: sensitive meeting — system withheld; mic used as mixed/playback track");
         return;
     }
     let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
     if sys.exists() {
         upload_channel_with_retry(token, session_id, "system", &sys).await;
+    }
+    // Mixed track (mic+system) — the single playback channel for the platform.
+    let mixed = dir.join(crate::audio::channel_writer::MIXED_WAV);
+    if mixed.exists() {
+        upload_channel_with_retry(token, session_id, "mixed", &mixed).await;
     }
 }
 
