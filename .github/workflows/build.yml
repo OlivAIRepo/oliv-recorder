@@ -112,14 +112,18 @@ jobs:
           # Only aarch64-apple-darwin for Apple Silicon (no Intel support)
           targets: ${{ contains(inputs.platform, 'macos') && 'aarch64-apple-darwin' || '' }}
 
+      # ImageVersion alone doesn't bust when Xcode rotates *within* an image, and
+      # cached build-script outputs bake absolute clang/Xcode paths (clang_rt.osx)
+      # that then break linking. Fold the exact Xcode build into the cache key.
+      - name: Toolchain cache tag (macOS)
+        if: contains(inputs.platform, 'macos')
+        run: echo "XCODE_TAG=$(xcodebuild -version | tr '\n ' '--')" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          # Include the runner image version so a runner rotation (which ships a
-          # new Xcode) busts the cache automatically — stale cached build-script
-          # outputs baked in old clang/Xcode paths and broke linking (clang_rt.osx).
-          key: ${{ inputs.platform }}-${{ inputs.target }}-${{ env.ImageVersion }}-vulkan-v2
+          key: ${{ inputs.platform }}-${{ inputs.target }}-${{ env.ImageVersion }}-${{ env.XCODE_TAG }}-vulkan-v2
 
       - name: install dependencies (ubuntu 24.04)
         if: contains(inputs.platform, 'ubuntu-24.04')
