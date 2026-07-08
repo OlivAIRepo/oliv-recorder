@@ -5,8 +5,9 @@
 //! We tap `mic_window` (cleaned mic) and `sys_window` (system) in the pipeline
 //! right before they are mixed — never the raw mic — and the mixer's output for
 //! the mixed track. Files land in the meeting folder; the ingest uploads them at
-//! `recording-stopped` per the "sensitive meeting" flag (sensitive => mic only;
-//! system + mixed both carry the other side's audio and are withheld).
+//! `recording-stopped`. The "mixed" channel is always uploaded for playback
+//! (mic-only substitute for sensitive meetings, where the system channel and the
+//! mic+system `mixed.wav` are withheld).
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
