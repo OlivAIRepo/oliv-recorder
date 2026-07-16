@@ -367,7 +367,11 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                                 show_prompt_window(&app2);
                                 let _ = app2.emit(
                                     "meeting-detected",
-                                    serde_json::json!({ "app": name, "bundleId": source }),
+                                    serde_json::json!({
+                                        "app": name,
+                                        "bundleId": source,
+                                        "sensitive": crate::ingest::is_sensitive(),
+                                    }),
                                 );
                             });
                         }

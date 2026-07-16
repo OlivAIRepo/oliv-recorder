@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 use serde_json::json;
-use tauri::{AppHandle, Listener, Runtime};
+use tauri::{AppHandle, Emitter, Listener, Runtime};
 
 const DEFAULT_BACKEND_URL: &str = "https://my.oliv.ai";
 const PROVIDER_LOCAL: &str = "local";
@@ -29,11 +29,24 @@ pub(crate) const USER_AGENT: &str = concat!("OlivRecorder/", env!("CARGO_PKG_VER
 // channel is uploaded; otherwise both mic + system are uploaded. Never raw mic.
 static SENSITIVE: AtomicBool = AtomicBool::new(false);
 
-/// Set by the Home "Sensitive meeting" toggle.
+/// Set by the Home "Sensitive meeting" toggle or the meeting-detected prompt.
+/// Broadcasts `sensitive-changed` so every window's toggle stays in sync.
 #[tauri::command]
-pub fn oliv_set_sensitive(sensitive: bool) {
+pub fn oliv_set_sensitive<R: Runtime>(app: AppHandle<R>, sensitive: bool) {
     SENSITIVE.store(sensitive, Ordering::SeqCst);
     log::info!("ingest: sensitive meeting = {sensitive}");
+    let _ = app.emit("sensitive-changed", json!({ "sensitive": sensitive }));
+}
+
+/// Current value of the sensitive toggle (UI restore on mount).
+#[tauri::command]
+pub fn oliv_get_sensitive() -> bool {
+    SENSITIVE.load(Ordering::SeqCst)
+}
+
+/// Read the sensitive flag from Rust (e.g. to seed the meeting-detected prompt).
+pub fn is_sensitive() -> bool {
+    SENSITIVE.load(Ordering::SeqCst)
 }
 
 // Source app that triggered the recording (e.g. "zoom.us" from the auto-detect

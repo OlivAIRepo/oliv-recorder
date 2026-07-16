@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import Image from 'next/image';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -20,9 +21,6 @@ import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { indexedDBService } from '@/services/indexedDBService';
 import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import { toast } from 'sonner';
-
-// Persisted per-session so the audio pipeline (sensitive => upload mic only) can read it.
-const SENSITIVE_KEY = 'oliv_sensitive_meeting';
 
 export default function Home() {
   const [isRecording, setIsRecordingState] = useState(false);
@@ -80,22 +78,24 @@ export default function Home() {
     })();
   }, []);
 
+  // The Rust SENSITIVE flag is the source of truth (it decides the upload).
+  // Restore from it on mount and follow `sensitive-changed` broadcasts so this
+  // checkbox stays in sync with the meeting-detected prompt's toggle.
   useEffect(() => {
     Analytics.trackPageView('home');
-    let restored = false;
-    try {
-      restored = sessionStorage.getItem(SENSITIVE_KEY) === 'true';
-    } catch { /* sessionStorage unavailable */ }
-    setSensitive(restored);
-    // Sync the restored value to the backend so the upload decision matches.
-    invoke('oliv_set_sensitive', { sensitive: restored }).catch(() => { });
+    invoke<boolean>('oliv_get_sensitive')
+      .then(setSensitive)
+      .catch(() => { });
+    const unlisten = listen<{ sensitive: boolean }>('sensitive-changed', (event) => {
+      setSensitive(!!event.payload?.sensitive);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   const toggleSensitive = (val: boolean) => {
     setSensitive(val);
-    try {
-      sessionStorage.setItem(SENSITIVE_KEY, val ? 'true' : 'false');
-    } catch { /* sessionStorage unavailable */ }
     invoke('oliv_set_sensitive', { sensitive: val }).catch(() => { });
   };
 
