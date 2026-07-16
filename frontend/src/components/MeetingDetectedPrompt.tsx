@@ -7,9 +7,6 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 
-// Same key the Home screen uses, so the sensitive choice stays consistent.
-const SENSITIVE_KEY = 'oliv_sensitive_meeting';
-
 interface StartPayload {
   app: string;
   sensitive: boolean;
@@ -40,11 +37,8 @@ export default function MeetingDetectedPrompt() {
     const unlisten = listen<StartPayload>('start-recording-from-prompt', async (event) => {
       if (isRecordingRef.current) return;
       const { app, sensitive } = event.payload;
-      try {
-        sessionStorage.setItem(SENSITIVE_KEY, sensitive ? 'true' : 'false');
-      } catch {
-        /* sessionStorage unavailable */
-      }
+      // Rust holds the authoritative flag and rebroadcasts `sensitive-changed`,
+      // which the Home screen's checkbox follows.
       await invoke('oliv_set_sensitive', { sensitive }).catch(() => {});
       await invoke('oliv_set_source_app', { app }).catch(() => {});
       setMeetingTitle(app);

@@ -81,12 +81,12 @@
   }
 
   // --- Meeting detected: 10s → auto Start. Mic-only toggle shown. ---
-  function renderDetect(app) {
+  function renderDetect(app, sensitive) {
     mode = "detect";
     currentApp = app || "a meeting app";
     titleEl.textContent = "Meeting detected";
     sensitiveRow.classList.remove("hidden");
-    sensitiveEl.checked = false;
+    sensitiveEl.checked = !!sensitive; // seed from the app's current toggle
     btnSecondary.textContent = "Dismiss";
     btnSecondary.className = "secondary";
     btnPrimary.textContent = "Start transcription";
@@ -109,8 +109,18 @@
   btnPrimary.addEventListener("click", doPrimary);
   btnSecondary.addEventListener("click", doSecondary);
 
+  // Keep the Home-screen toggle in sync the moment the user flips it here.
+  sensitiveEl.addEventListener("change", function () {
+    invoke("oliv_set_sensitive", { sensitive: sensitiveEl.checked }).catch(function () {});
+  });
+  // ...and follow changes made on the Home screen while this prompt is open.
+  listen("sensitive-changed", function (e) {
+    sensitiveEl.checked = !!(((e && e.payload) || {}).sensitive);
+  });
+
   listen("meeting-detected", function (e) {
-    renderDetect(((e && e.payload) || {}).app);
+    var p = (e && e.payload) || {};
+    renderDetect(p.app, p.sensitive);
   });
   listen("meeting-ended", function () {
     renderEnded();

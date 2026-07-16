@@ -725,6 +725,7 @@ pub fn run() {
             auth::get_oliv_account,
             auth::oliv_logout,
             ingest::oliv_set_sensitive,
+            ingest::oliv_get_sensitive,
             ingest::oliv_set_source_app,
             show_main_window,
             reset_app_data,
