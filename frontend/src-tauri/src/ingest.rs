@@ -439,9 +439,9 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
 }
 
 /// Upload the cleaned channel WAV(s) from the recording folder. The "mixed"
-/// channel is always uploaded so playback has one reliable track: mic+system
-/// normally, mic-only for sensitive meetings (where the system channel is
-/// withheld). Never the raw mic.
+/// channel is always uploaded so playback has one reliable track: stereo
+/// mic(L)+system(R) normally, mono mic-only for sensitive meetings (where the
+/// system channel is withheld). Never the raw mic.
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     let sensitive = SENSITIVE.load(Ordering::SeqCst);
     let dir = Path::new(folder);
@@ -468,7 +468,8 @@ async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     if sys.exists() {
         upload_channel_with_retry(token, session_id, "system", &sys).await;
     }
-    // Mixed track (mic+system) — the single playback channel for the platform.
+    // Stereo mixed track (mic=left, system=right) — the single playback channel
+    // for the platform, and channel-separable for multichannel transcription.
     let mixed = dir.join(crate::audio::channel_writer::MIXED_WAV);
     if mixed.exists() {
         upload_channel_with_retry(token, session_id, "mixed", &mixed).await;
