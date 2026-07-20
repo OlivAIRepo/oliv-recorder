@@ -955,6 +955,17 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // Dock icon click (macOS "reopen"): as an Accessory app macOS won't
+            // surface any window itself, so show + focus the main window here —
+            // same behavior as the tray's "Open Main Window".
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = &event {
+                if let Some(w) = app_handle.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
             if let tauri::RunEvent::ExitRequested { api, .. } = &event {
                 // Cmd+Q / system quit: don't terminate — keep running in the
                 // menubar and just hide the window. A real exit goes through the
