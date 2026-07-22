@@ -5,7 +5,6 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useRouter, usePathname } from 'next/navigation';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
-import { useTranscripts } from '@/contexts/TranscriptContext';
 
 interface StartPayload {
   app: string;
@@ -21,7 +20,6 @@ export default function MeetingDetectedPrompt() {
   const router = useRouter();
   const pathname = usePathname();
   const { isRecording } = useRecordingState();
-  const { setMeetingTitle } = useTranscripts();
 
   // Refs so the (mount-once) listener reads live values.
   const isRecordingRef = useRef(isRecording);
@@ -40,8 +38,9 @@ export default function MeetingDetectedPrompt() {
       // Rust holds the authoritative flag and rebroadcasts `sensitive-changed`,
       // which the Home screen's checkbox follows.
       await invoke('oliv_set_sensitive', { sensitive }).catch(() => {});
+      // Tag the source app for the ingest session, but don't use it as the
+      // meeting name — names are always auto-generated (Meeting dd_mm_yy_…).
       await invoke('oliv_set_source_app', { app }).catch(() => {});
-      setMeetingTitle(app);
       if (pathnameRef.current === '/') {
         window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
       } else {
@@ -56,7 +55,7 @@ export default function MeetingDetectedPrompt() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [router, setMeetingTitle]);
+  }, [router]);
 
   return null;
 }
