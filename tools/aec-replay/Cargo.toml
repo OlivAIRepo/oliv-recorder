@@ -1,0 +1,12 @@
+[package]
+name = "aec-replay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Offline AEC3 tuning harness — replays a raw mic + system reference pair through the same sonora pipeline the app uses"
+
+[dependencies]
+# Pin the exact rev the app uses (frontend/src-tauri/Cargo.toml) so offline
+# results match in-app behavior.
+sonora = { git = "https://github.com/dignifiedquire/sonora", rev = "dec6a074725e82ef371a024fc45236d60f0acf52" }
+hound = "3.5"

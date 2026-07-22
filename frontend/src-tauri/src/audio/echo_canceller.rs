@@ -11,16 +11,68 @@
 //! first, then the near-end (capture) frame is cleaned against it.
 //!
 //! Replaces the earlier hand-rolled NLMS canceller (which couldn't beat
-//! built-in-speaker bleed cleanly). `OLIV_AEC_ENABLED` (default ON) bypasses it
-//! (raw mic passthrough) when set to "0"/"false".
+//! built-in-speaker bleed cleanly).
+//!
+//! Tuning knobs (env vars, read once when the canceller is built — i.e. per
+//! recording). Tune them offline first with the `aec-replay` harness
+//! (`tools/aec-replay`), which reads the same variables:
+//! - `OLIV_AEC_ENABLED`     "0"/"false" bypasses the canceller (default ON)
+//! - `OLIV_NS_LEVEL`        off|low|moderate|high|veryhigh — WebRTC noise
+//!                          suppression, ~6/12/18/21 dB (default off)
+//! - `OLIV_HPF_ENABLED`     "1" adds the full-band high-pass filter; the AEC
+//!                          always enforces a split-band HPF (default off)
+//! - `OLIV_AEC_TRANSPARENT` legacy|hmm — AEC3's no-echo classifier (default
+//!                          legacy; hmm reacts faster on headset/no-echo use)
 
-use sonora::config::EchoCanceller as Aec3Config;
+use sonora::config::{
+    EchoCanceller as Aec3Config, HighPassFilter, NoiseSuppression, NoiseSuppressionLevel,
+    TransparentModeType,
+};
 use sonora::{AudioProcessing, Config, StreamConfig};
 
 fn env_bool(key: &str, default: bool) -> bool {
     match std::env::var(key) {
         Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | ""),
         Err(_) => default,
+    }
+}
+
+/// Build the APM config from the `OLIV_*` env knobs (documented above).
+/// Defaults reproduce the shipped behavior: AEC3 only, everything else off.
+fn build_config() -> Config {
+    let ns = std::env::var("OLIV_NS_LEVEL").unwrap_or_default();
+    let noise_suppression = match ns.trim().to_ascii_lowercase().as_str() {
+        "low" => Some(NoiseSuppressionLevel::Low),
+        "moderate" | "mod" => Some(NoiseSuppressionLevel::Moderate),
+        "high" => Some(NoiseSuppressionLevel::High),
+        "veryhigh" | "very_high" => Some(NoiseSuppressionLevel::VeryHigh),
+        _ => None,
+    }
+    .map(|level| NoiseSuppression {
+        level,
+        analyze_linear_aec_output_when_available: true,
+    });
+    let transparent_mode = match std::env::var("OLIV_AEC_TRANSPARENT")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "hmm" => TransparentModeType::Hmm,
+        _ => TransparentModeType::Legacy,
+    };
+    let high_pass_filter = env_bool("OLIV_HPF_ENABLED", false).then(HighPassFilter::default);
+    log::info!(
+        "echo_canceller(AEC3): config ns={noise_suppression:?} hpf={high_pass_filter:?} transparent={transparent_mode:?}"
+    );
+    Config {
+        echo_canceller: Some(Aec3Config {
+            transparent_mode,
+            ..Default::default()
+        }),
+        noise_suppression,
+        high_pass_filter,
+        ..Default::default()
     }
 }
 
@@ -38,13 +90,9 @@ impl EchoCanceller {
         let supported = matches!(sample_rate, 8000 | 16000 | 32000 | 48000);
         let frame = (sample_rate as usize / 100).max(1); // 10ms
         let apm = if enabled && supported {
-            let config = Config {
-                echo_canceller: Some(Aec3Config::default()),
-                ..Default::default()
-            };
             Some(
                 AudioProcessing::builder()
-                    .config(config)
+                    .config(build_config())
                     .capture_config(StreamConfig::new(sample_rate, 1))
                     .render_config(StreamConfig::new(sample_rate, 1))
                     .build(),
