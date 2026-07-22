@@ -154,9 +154,7 @@ export default function Home() {
               className="h-4 w-4 rounded border-gray-300"
             />
             Sensitive meeting
-            <span className="text-gray-400">
-              — only your voice is transcribed{recordingState.isRecording ? ' (takes effect immediately)' : ''}
-            </span>
+            <span className="text-gray-400">— only your voice is transcribed</span>
           </label>
 
           {controlsVisible && (
