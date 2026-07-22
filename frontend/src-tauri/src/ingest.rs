@@ -242,6 +242,15 @@ fn segment_json(ev: &TranscriptEvent) -> serde_json::Value {
 }
 
 async fn push_segment(ev: TranscriptEvent) {
+    // Sensitive meeting: no "Them" text may leave the machine. The pipeline
+    // already stops producing system-channel segments while the toggle is on;
+    // this catches anything that was still in the transcription queue when it
+    // flipped. Dropped here means it's also absent from the end-of-meeting
+    // full resend (all_segments).
+    if ev.source == "Them" && SENSITIVE.load(Ordering::SeqCst) {
+        log::info!("ingest: sensitive — dropping system-channel segment");
+        return;
+    }
     // Either POST now (session ready) or buffer (still being created). Never POST
     // before the session row exists, or it 500s with "no Session".
     let to_post = {
@@ -438,31 +447,18 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
     }
 }
 
-/// Upload the cleaned channel WAV(s) from the recording folder. The "mixed"
-/// channel is always uploaded so playback has one reliable track: stereo
-/// mic(L)+system(R) normally, mono mic-only for sensitive meetings (where the
-/// system channel is withheld). Never the raw mic.
+/// Upload the cleaned channel WAV(s) from the recording folder. Sensitive
+/// scrubbing happens at capture time in the pipeline (system.wav and the mixed
+/// track's right channel are written as silence while the toggle is on), so
+/// every file here is already safe to upload as-is. Never the raw mic.
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
-    let sensitive = SENSITIVE.load(Ordering::SeqCst);
     let dir = Path::new(folder);
 
     let mic = dir.join(crate::audio::channel_writer::MIC_WAV);
-    let mic_exists = mic.exists();
-    if mic_exists {
+    if mic.exists() {
         upload_channel_with_retry(token, session_id, "mic", &mic).await;
     } else {
         log::warn!("ingest: {} not found — skipping mic upload", mic.display());
-    }
-
-    if sensitive {
-        // No other-side audio for sensitive meetings — but the "mixed" channel
-        // must always be populated so playback can rely on a single track. Use
-        // the mic WAV as the mixed/playback track (mic is the only audio anyway).
-        if mic_exists {
-            upload_channel_with_retry(token, session_id, "mixed", &mic).await;
-        }
-        log::info!("ingest: sensitive meeting — system withheld; mic used as mixed/playback track");
-        return;
     }
     let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
     if sys.exists() {

@@ -9,9 +9,9 @@
 //! right before they are mixed — never the raw mic. The two windows come from the
 //! same ring-buffer extraction, so the stereo channels stay sample-aligned. Files
 //! land in the meeting folder; the ingest uploads them at `recording-stopped`.
-//! The "mixed" channel is always uploaded for playback (mic-only substitute for
-//! sensitive meetings, where the system channel and this stereo `mixed.wav` are
-//! withheld).
+//! Sensitive meetings are scrubbed upstream in the pipeline: while the toggle is
+//! on (it can flip mid-call) the system channel and the mixed track's right
+//! channel arrive here as silence, so every written file is safe by construction.
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -128,6 +128,12 @@ pub struct DualChannelWriter {
     mixed: Option<WavWriter>,
     sample_rate: u32,
     dir: PathBuf,
+    // Samples elided from system.wav while sensitive. Backfilled as zeros on
+    // the next real write so the file stays timeline-aligned with mic.wav; if
+    // no real write ever follows (sensitive from start to end, or through the
+    // end), the zeros are never written — a fully sensitive meeting produces
+    // no system.wav at all.
+    system_gap: u64,
 }
 
 impl DualChannelWriter {
@@ -135,7 +141,7 @@ impl DualChannelWriter {
     pub fn try_new(sample_rate: u32) -> Option<Self> {
         let dir = channel_dir()?;
         info!("channel_writer: capturing mic/system/mixed channels into {:?}", dir);
-        Some(Self { mic: None, system: None, mixed: None, sample_rate, dir })
+        Some(Self { mic: None, system: None, mixed: None, sample_rate, dir, system_gap: 0 })
     }
 
     pub fn write_mic(&mut self, samples: &[f32]) {
@@ -155,6 +161,12 @@ impl DualChannelWriter {
         }
     }
 
+    /// Sensitive window: elide these system samples instead of writing them.
+    /// Cheap bookkeeping only — no file is created or grown by skipping.
+    pub fn skip_system(&mut self, frames: usize) {
+        self.system_gap = self.system_gap.saturating_add(frames as u64);
+    }
+
     pub fn write_system(&mut self, samples: &[f32]) {
         if self.system.is_none() {
             match WavWriter::create(&self.dir.join(SYSTEM_WAV), self.sample_rate, 1) {
@@ -166,6 +178,21 @@ impl DualChannelWriter {
             }
         }
         if let Some(w) = self.system.as_mut() {
+            // Backfill any sensitive-elided stretch with silence first, so this
+            // write lands at the right timeline position relative to mic.wav.
+            if self.system_gap > 0 {
+                let zeros = vec![0.0f32; self.sample_rate as usize]; // 1s chunks
+                let mut remaining = self.system_gap;
+                while remaining > 0 {
+                    let n = remaining.min(zeros.len() as u64) as usize;
+                    if let Err(e) = w.write_samples(&zeros[..n]) {
+                        warn!("channel_writer: system gap backfill failed: {e}");
+                        break;
+                    }
+                    remaining -= n as u64;
+                }
+                self.system_gap = 0;
+            }
             if let Err(e) = w.write_samples(samples) {
                 warn!("channel_writer: system write failed: {e}");
             }
