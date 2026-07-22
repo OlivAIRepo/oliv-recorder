@@ -849,23 +849,48 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
+                            // Sensitive meeting: checked per 50ms window so the toggle can
+                            // flip mid-call. While ON, the other side is scrubbed from every
+                            // capture surface — system.wav, the mixed track's right channel,
+                            // and the system-channel transcription — by substituting silence
+                            // (keeps files sample-aligned; the flip shows as a muted gap).
+                            let sensitive = crate::ingest::is_sensitive();
+
                             // Capture the cleaned channels separately (before mixing) for S3
                             // upload. Echo-cancel the mic against the system reference (no-op
                             // unless OLIV_AEC_ENABLED) so mic.wav carries the user's voice.
+                            // IMPORTANT: the AEC must always get the REAL system reference —
+                            // even when sensitive — or the far side's speaker bleed would leak
+                            // into the mic channel uncancelled.
                             let mic_clean = echo_canceller.process(&mic_window, &sys_window);
+                            let silence: Vec<f32>;
+                            let sys_capture: &[f32] = if sensitive {
+                                silence = vec![0.0; sys_window.len()];
+                                &silence
+                            } else {
+                                &sys_window
+                            };
                             if let Some(cw) = self.channel_writer.as_mut() {
                                 cw.write_mic(&mic_clean);
-                                cw.write_system(&sys_window);
+                                if sensitive {
+                                    // Elide rather than write silence: a meeting
+                                    // that is sensitive from start to end (or to
+                                    // the end) produces no/shorter system.wav.
+                                    cw.skip_system(sys_window.len());
+                                } else {
+                                    cw.write_system(&sys_window);
+                                }
                             }
 
-                            // Mixed stream is still produced for the local recording WAV.
+                            // Mixed stream is still produced for the local recording WAV —
+                            // also scrubbed while sensitive so no artifact keeps the far side.
                             // (Mic already normalized by EBU R128 to -23 LUFS — no post-gain.)
-                            let mixed_with_gain = self.mixer.mix_window(&mic_window, &sys_window);
+                            let mixed_with_gain = self.mixer.mix_window(&mic_window, sys_capture);
                             // Persist the uploaded mixed track as stereo — cleaned mic on
                             // the left, system on the right — so playback keeps both sides
                             // and multichannel transcription can split speakers by channel.
                             if let Some(cw) = self.channel_writer.as_mut() {
-                                cw.write_mixed(&mic_clean, &sys_window);
+                                cw.write_mixed(&mic_clean, sys_capture);
                             }
 
                             // STEP 3: Per-channel transcription so each segment carries the
@@ -875,8 +900,14 @@ impl AudioPipeline {
                             let mic_segments = self.vad_processor.process_audio(&mic_clean);
                             self.dispatch_segments(mic_segments, DeviceType::Microphone);
 
-                            let sys_segments = self.sys_vad_processor.process_audio(&sys_window);
-                            self.dispatch_segments(sys_segments, DeviceType::System);
+                            // Sensitive: the system VAD is fed silence (keeps its sample
+                            // timeline running) and anything it still emits — e.g. an
+                            // utterance in flight when the toggle flipped — is dropped, so
+                            // no "Them" segment is ever produced while sensitive is on.
+                            let sys_segments = self.sys_vad_processor.process_audio(sys_capture);
+                            if !sensitive {
+                                self.dispatch_segments(sys_segments, DeviceType::System);
+                            }
 
                             // STEP 4: Send mixed audio for recording (WAV file)
                             if let Some(ref sender) = self.recording_sender_for_mixed {
@@ -918,11 +949,15 @@ impl AudioPipeline {
     fn flush_remaining_audio(&mut self) -> Result<()> {
         info!("Flushing remaining audio from pipeline (processed {} chunks)", self.processed_chunks);
 
-        // Flush both per-channel VADs so trailing speech isn't lost.
+        // Flush both per-channel VADs so trailing speech isn't lost. The system
+        // flush is dropped when the meeting is sensitive at stop time — no
+        // "Them" text may surface while the toggle is on.
         let mic_final = self.vad_processor.flush();
         self.dispatch_segments(mic_final, DeviceType::Microphone);
         let sys_final = self.sys_vad_processor.flush();
-        self.dispatch_segments(sys_final, DeviceType::System);
+        if !crate::ingest::is_sensitive() {
+            self.dispatch_segments(sys_final, DeviceType::System);
+        }
 
         Ok(())
     }

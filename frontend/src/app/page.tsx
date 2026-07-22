@@ -27,7 +27,7 @@ export default function Home() {
   const [barHeights] = useState(['58%', '76%', '58%']);
   const [sensitive, setSensitive] = useState(false);
 
-  const { meetingTitle, setMeetingTitle } = useTranscripts();
+  const { meetingTitle } = useTranscripts();
   const { transcriptModelConfig, selectedDevices } = useConfig();
   const recordingState = useRecordingState();
   const { status, isProcessing } = recordingState;
@@ -127,7 +127,6 @@ export default function Home() {
     status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
     status === RecordingStatus.SAVING;
   const isProcessingStop = isFinishing || isProcessing;
-  const nameValue = meetingTitle === '+ New Call' ? '' : meetingTitle;
   const controlsVisible = (hasMicrophone || isRecording) && !isFinishing;
 
   return (
@@ -146,25 +145,18 @@ export default function Home() {
             <h1 className="text-xl font-semibold text-gray-900">Oliv AI</h1>
           </div>
 
-          <input
-            type="text"
-            value={nameValue}
-            onChange={(e) => setMeetingTitle(e.target.value || '+ New Call')}
-            placeholder="Meeting name (optional)"
-            disabled={recordingState.isRecording || isProcessingStop}
-            className="w-full text-center rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
-          />
-
           <label className="flex items-center gap-2 text-sm text-gray-600 select-none">
             <input
               type="checkbox"
               checked={sensitive}
               onChange={(e) => toggleSensitive(e.target.checked)}
-              disabled={recordingState.isRecording || isProcessingStop}
+              disabled={isProcessingStop}
               className="h-4 w-4 rounded border-gray-300"
             />
             Sensitive meeting
-            <span className="text-gray-400">— only your voice is transcribed</span>
+            <span className="text-gray-400">
+              — only your voice is transcribed{recordingState.isRecording ? ' (takes effect immediately)' : ''}
+            </span>
           </label>
 
           {controlsVisible && (
