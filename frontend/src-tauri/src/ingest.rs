@@ -12,7 +12,7 @@
 //! Endpoints (mounted under /api): session | segments | session/end | audio.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::Deserialize;
@@ -47,6 +47,43 @@ pub fn oliv_get_sensitive() -> bool {
 /// Read the sensitive flag from Rust (e.g. to seed the meeting-detected prompt).
 pub fn is_sensitive() -> bool {
     SENSITIVE.load(Ordering::SeqCst)
+}
+
+// Session-wide sensitivity accounting. The pipeline notes every capture window;
+// session/end reports the aggregate as "full" | "partial" | "none" (the toggle
+// can flip mid-call, so a single start-time boolean can't describe the session).
+static SENSITIVE_WINDOWS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_WINDOWS: AtomicU64 = AtomicU64::new(0);
+
+/// Called by the audio pipeline once per mixing window with that window's
+/// sensitive state.
+pub fn note_capture_window(sensitive: bool) {
+    TOTAL_WINDOWS.fetch_add(1, Ordering::Relaxed);
+    if sensitive {
+        SENSITIVE_WINDOWS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn reset_sensitivity_accounting() {
+    TOTAL_WINDOWS.store(0, Ordering::Relaxed);
+    SENSITIVE_WINDOWS.store(0, Ordering::Relaxed);
+}
+
+/// Aggregate sensitivity of the session that just ended. Falls back to the
+/// live flag when no windows were counted (e.g. a recording with no audio).
+fn sensitive_level() -> &'static str {
+    let total = TOTAL_WINDOWS.load(Ordering::Relaxed);
+    let sensitive = SENSITIVE_WINDOWS.load(Ordering::Relaxed);
+    if total == 0 {
+        return if is_sensitive() { "full" } else { "none" };
+    }
+    if sensitive == 0 {
+        "none"
+    } else if sensitive >= total {
+        "full"
+    } else {
+        "partial"
+    }
 }
 
 // Source app that triggered the recording (e.g. "zoom.us" from the auto-detect
@@ -318,10 +355,15 @@ async fn end_session() {
             log::info!("ingest: reconciled full transcript ({total} segments) for {session_id}");
         }
     }
+    // Aggregate sensitivity over the whole session ("full" | "partial" |
+    // "none") — the toggle can flip mid-call, so this, not the start-time
+    // boolean, is the authoritative value.
+    let sensitive = sensitive_level();
     let body = json!({
         "session_id": session_id,
         "ended_at": now_iso(),
         "segment_count": count,
+        "sensitive": sensitive,
     });
     if let Err(e) = post_json(&token, "session/end", body).await {
         log::warn!("ingest: {e}");
@@ -345,7 +387,18 @@ async fn upload_channel(
     channel: &str,
     path: &Path,
 ) -> Result<(), String> {
-    let filename = format!("{channel}.wav");
+    // Name + content type follow the local file's format: the per-channel
+    // tracks are WAV, the mixed/playback track is the stereo AAC audio.mp4.
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("wav")
+        .to_ascii_lowercase();
+    let content_type = match ext.as_str() {
+        "mp4" | "m4a" => "audio/mp4",
+        _ => "audio/wav",
+    };
+    let filename = format!("{channel}.{ext}");
 
     // 1. Presigned PUT URL.
     let presign = post_json_recv(
@@ -355,7 +408,7 @@ async fn upload_channel(
             "session_id": session_id,
             "channel": channel,
             "filename": filename,
-            "content_type": "audio/wav",
+            "content_type": content_type,
         }),
     )
     .await
@@ -447,10 +500,11 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
     }
 }
 
-/// Upload the cleaned channel WAV(s) from the recording folder. Sensitive
-/// scrubbing happens at capture time in the pipeline (system.wav and the mixed
-/// track's right channel are written as silence while the toggle is on), so
-/// every file here is already safe to upload as-is. Never the raw mic.
+/// Upload the recording's audio from the meeting folder: mic.wav + system.wav
+/// (per-channel transcription) and the stereo audio.mp4 as the "mixed"
+/// playback channel. Sensitive scrubbing happens at capture time in the
+/// pipeline (the system channel is elided/silenced while the toggle is on),
+/// so every file here is already safe to upload as-is. Never the raw mic.
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     let dir = Path::new(folder);
 
@@ -464,11 +518,15 @@ async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     if sys.exists() {
         upload_channel_with_retry(token, session_id, "system", &sys).await;
     }
-    // Stereo mixed track (mic=left, system=right) — the single playback channel
-    // for the platform, and channel-separable for multichannel transcription.
-    let mixed = dir.join(crate::audio::channel_writer::MIXED_WAV);
+    // Stereo playback track (mic=left, system=right) — the single playback
+    // channel for the platform, channel-separable for multichannel
+    // transcription, and ~10x smaller than the old PCM mixed.wav since it's
+    // the recording saver's AAC audio.mp4.
+    let mixed = dir.join("audio.mp4");
     if mixed.exists() {
         upload_channel_with_retry(token, session_id, "mixed", &mixed).await;
+    } else {
+        log::warn!("ingest: {} not found — skipping mixed upload", mixed.display());
     }
 }
 
@@ -479,6 +537,8 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) {
         let meeting_name = serde_json::from_str::<serde_json::Value>(event.payload())
             .ok()
             .and_then(|v| v.get("meeting_name").and_then(|m| m.as_str()).map(String::from));
+        // Fresh sensitivity accounting for this session's windows.
+        reset_sensitivity_accounting();
         tauri::async_runtime::spawn(async move { start_session(meeting_name).await });
     });
 

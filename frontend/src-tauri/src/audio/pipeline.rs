@@ -142,53 +142,6 @@ impl AudioMixerRingBuffer {
 
 }
 
-/// Simple audio mixer without aggressive ducking
-/// Combines mic + system audio with basic clipping prevention
-struct ProfessionalAudioMixer;
-
-impl ProfessionalAudioMixer {
-    fn new(_sample_rate: u32) -> Self {
-        Self
-    }
-
-    fn mix_window(&mut self, mic_window: &[f32], sys_window: &[f32]) -> Vec<f32> {
-        // Handle different lengths (already padded by extract_window, but defensive)
-        let max_len = mic_window.len().max(sys_window.len());
-        let mut mixed = Vec::with_capacity(max_len);
-
-        // Professional mixing with soft scaling to prevent distortion
-        // Uses proportional scaling instead of hard clamping to avoid artifacts
-        for i in 0..max_len {
-            let mic = mic_window.get(i).copied().unwrap_or(0.0);
-            let sys = sys_window.get(i).copied().unwrap_or(0.0);
-
-            // Pre-scale system audio to 70% to leave headroom
-            // This prevents constant soft scaling which can cause pumping artifacts
-            // Mic is normalized to -23 LUFS (already optimal), system needs reduction
-            let sys_scaled = sys * 1.0;
-            let _mic_scaled = mic * 0.8;  // Reserved for future mic scaling
-
-            // Sum without ducking - mic stays at full volume, system slightly reduced
-            let sum = mic + sys_scaled;
-
-            // CRITICAL FIX: Soft scaling prevents distortion artifacts
-            // If the sum would exceed ±1.0, scale down PROPORTIONALLY
-            // This avoids hard clipping distortion that sounds like "radio breaks"
-            let sum_abs = sum.abs();
-            let mixed_sample = if sum_abs > 1.0 {
-                // Scale down to fit within ±1.0
-                sum / sum_abs
-            } else {
-                sum
-            };
-
-            mixed.push(mixed_sample);
-        }
-
-        mixed
-    }
-}
-
 /// Simplified audio capture without broadcast channels
 #[derive(Clone)]
 pub struct AudioCapture {
@@ -693,9 +646,8 @@ pub struct AudioPipeline {
     processed_chunks: u64,
     // Smart batching for audio metrics
     metrics_batcher: Option<AudioMetricsBatcher>,
-    // PROFESSIONAL AUDIO MIXING: Ring buffer + RMS-based mixer
+    // Ring buffer aligning mic + system streams into fixed windows
     ring_buffer: AudioMixerRingBuffer,
-    mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
     // Captures the cleaned mic + system channels to separate WAVs for S3 upload.
@@ -752,9 +704,8 @@ impl AudioPipeline {
             }
         };
 
-        // Initialize professional audio mixing components
+        // Initialize the mic/system alignment ring buffer
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
-        let mixer = ProfessionalAudioMixer::new(sample_rate);
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
         let _ = target_chunk_duration_ms;
@@ -772,9 +723,7 @@ impl AudioPipeline {
             processed_chunks: 0,
             // Initialize metrics batcher for smart batching
             metrics_batcher: Some(AudioMetricsBatcher::new()),
-            // Initialize professional audio mixing
             ring_buffer,
-            mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
             channel_writer: None,              // Opened in run() if a meeting folder is set
         }
@@ -849,12 +798,16 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
-                            // Sensitive meeting: checked per 50ms window so the toggle can
+                            // Sensitive meeting: checked per mixing window so the toggle can
                             // flip mid-call. While ON, the other side is scrubbed from every
-                            // capture surface — system.wav, the mixed track's right channel,
-                            // and the system-channel transcription — by substituting silence
-                            // (keeps files sample-aligned; the flip shows as a muted gap).
+                            // capture surface — system.wav, the stereo playback track's right
+                            // channel (audio.mp4), and the system-channel transcription — by
+                            // eliding or substituting silence (keeps everything timeline-
+                            // aligned; the flip shows as a muted gap).
                             let sensitive = crate::ingest::is_sensitive();
+                            // Feed the session-wide full/partial/none aggregate
+                            // reported at session end.
+                            crate::ingest::note_capture_window(sensitive);
 
                             // Capture the cleaned channels separately (before mixing) for S3
                             // upload. Echo-cancel the mic against the system reference (no-op
@@ -882,17 +835,6 @@ impl AudioPipeline {
                                 }
                             }
 
-                            // Mixed stream is still produced for the local recording WAV —
-                            // also scrubbed while sensitive so no artifact keeps the far side.
-                            // (Mic already normalized by EBU R128 to -23 LUFS — no post-gain.)
-                            let mixed_with_gain = self.mixer.mix_window(&mic_window, sys_capture);
-                            // Persist the uploaded mixed track as stereo — cleaned mic on
-                            // the left, system on the right — so playback keeps both sides
-                            // and multichannel transcription can split speakers by channel.
-                            if let Some(cw) = self.channel_writer.as_mut() {
-                                cw.write_mixed(&mic_clean, sys_capture);
-                            }
-
                             // STEP 3: Per-channel transcription so each segment carries the
                             // right speaker — mic → "Me", system → "Them". On headphones the
                             // channels are cleanly separated; on speakers the far side may
@@ -909,10 +851,19 @@ impl AudioPipeline {
                                 self.dispatch_segments(sys_segments, DeviceType::System);
                             }
 
-                            // STEP 4: Send mixed audio for recording (WAV file)
+                            // STEP 4: Send the playback track to the recording saver as
+                            // interleaved stereo frames — cleaned mic on the left, system
+                            // (sensitive-scrubbed) on the right. Encoded to stereo AAC
+                            // (audio.mp4), which replaces the old mono mix and the
+                            // uncompressed mixed.wav as the uploaded "mixed" channel.
                             if let Some(ref sender) = self.recording_sender_for_mixed {
+                                let mut stereo = Vec::with_capacity(mic_clean.len() * 2);
+                                for i in 0..mic_clean.len().max(sys_capture.len()) {
+                                    stereo.push(mic_clean.get(i).copied().unwrap_or(0.0));
+                                    stereo.push(sys_capture.get(i).copied().unwrap_or(0.0));
+                                }
                                 let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
+                                    data: stereo,
                                     sample_rate: self.sample_rate,
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,

@@ -236,7 +236,8 @@ impl RecordingSaver {
 
         // Only initialize incremental saver if checkpoints are needed (auto_save is true)
         if create_checkpoints {
-            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000)?;
+            // Stereo: the pipeline sends interleaved mic(L)/system(R) frames.
+            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 2)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
             info!("✅ Incremental audio saver initialized for meeting: {}", meeting_name);
         } else {
