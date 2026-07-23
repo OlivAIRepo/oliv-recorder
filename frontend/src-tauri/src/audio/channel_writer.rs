@@ -1,17 +1,15 @@
 //! Captures the cleaned audio channels to separate WAV files for end-of-call S3
 //! upload: `mic.wav` + `system.wav` (per-channel, used to reconstruct Me/Them in
-//! transcription) plus `mixed.wav` — a stereo track with the cleaned mic on the
-//! left channel and system audio on the right. The hard channel split serves
-//! playback and lets multichannel-aware transcription (e.g. AssemblyAI
-//! `multichannel`) separate the speakers exactly instead of diarizing.
+//! transcription). The playback "mixed" track is no longer written here — it's
+//! the recording saver's stereo `audio.mp4` (cleaned mic left, system right).
 //!
 //! We tap `mic_window` (cleaned mic) and `sys_window` (system) in the pipeline
-//! right before they are mixed — never the raw mic. The two windows come from the
-//! same ring-buffer extraction, so the stereo channels stay sample-aligned. Files
+//! right before they are captured — never the raw mic. The two windows come from
+//! the same ring-buffer extraction, so the files stay timeline-aligned. Files
 //! land in the meeting folder; the ingest uploads them at `recording-stopped`.
 //! Sensitive meetings are scrubbed upstream in the pipeline: while the toggle is
-//! on (it can flip mid-call) the system channel and the mixed track's right
-//! channel arrive here as silence, so every written file is safe by construction.
+//! on (it can flip mid-call) the system channel arrives here elided/silent, so
+//! every written file is safe by construction.
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -23,7 +21,6 @@ use log::{info, warn};
 
 pub const MIC_WAV: &str = "mic.wav";
 pub const SYSTEM_WAV: &str = "system.wav";
-pub const MIXED_WAV: &str = "mixed.wav";
 
 // Set by the recording saver when it creates the meeting folder; the pipeline
 // reads it to open the channel writers for that recording.
@@ -60,23 +57,6 @@ impl WavWriter {
         Ok(())
     }
 
-    /// Interleave two aligned windows as L/R stereo frames. If one window is
-    /// shorter (shouldn't happen — both come from the same extraction), the
-    /// missing side is padded with silence so the channels never drift.
-    fn write_interleaved(&mut self, left: &[f32], right: &[f32]) -> Result<()> {
-        let frames = left.len().max(right.len());
-        for i in 0..frames {
-            for s in [
-                left.get(i).copied().unwrap_or(0.0),
-                right.get(i).copied().unwrap_or(0.0),
-            ] {
-                let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-                self.writer.write_all(&v.to_le_bytes())?;
-            }
-        }
-        self.data_bytes = self.data_bytes.saturating_add((frames * 4) as u32);
-        Ok(())
-    }
 
     fn finalize(mut self) -> Result<()> {
         self.writer.flush()?;
@@ -119,13 +99,12 @@ fn write_wav_header<W: Write>(
     Ok(())
 }
 
-/// Writes the mic + system channels (for per-channel transcription) plus a mixed
-/// track (for human playback) for one recording. Writers open lazily on the first
-/// window so an unconfigured recording (no channel dir) is a no-op.
+/// Writes the mic + system channels (for per-channel transcription) for one
+/// recording. Writers open lazily on the first window so an unconfigured
+/// recording (no channel dir) is a no-op.
 pub struct DualChannelWriter {
     mic: Option<WavWriter>,
     system: Option<WavWriter>,
-    mixed: Option<WavWriter>,
     sample_rate: u32,
     dir: PathBuf,
     // Samples elided from system.wav while sensitive. Backfilled as zeros on
@@ -140,8 +119,8 @@ impl DualChannelWriter {
     /// Some(..) iff a meeting folder was set for this recording.
     pub fn try_new(sample_rate: u32) -> Option<Self> {
         let dir = channel_dir()?;
-        info!("channel_writer: capturing mic/system/mixed channels into {:?}", dir);
-        Some(Self { mic: None, system: None, mixed: None, sample_rate, dir, system_gap: 0 })
+        info!("channel_writer: capturing mic/system channels into {:?}", dir);
+        Some(Self { mic: None, system: None, sample_rate, dir, system_gap: 0 })
     }
 
     pub fn write_mic(&mut self, samples: &[f32]) {
@@ -199,23 +178,6 @@ impl DualChannelWriter {
         }
     }
 
-    /// Stereo mixed track: cleaned mic on the left channel, system on the right.
-    pub fn write_mixed(&mut self, mic: &[f32], system: &[f32]) {
-        if self.mixed.is_none() {
-            match WavWriter::create(&self.dir.join(MIXED_WAV), self.sample_rate, 2) {
-                Ok(w) => self.mixed = Some(w),
-                Err(e) => {
-                    warn!("channel_writer: failed to create {MIXED_WAV}: {e}");
-                    return;
-                }
-            }
-        }
-        if let Some(w) = self.mixed.as_mut() {
-            if let Err(e) = w.write_interleaved(mic, system) {
-                warn!("channel_writer: mixed write failed: {e}");
-            }
-        }
-    }
 
     pub fn finalize(self) {
         if let Some(w) = self.mic {
@@ -226,11 +188,6 @@ impl DualChannelWriter {
         if let Some(w) = self.system {
             if let Err(e) = w.finalize() {
                 warn!("channel_writer: system finalize failed: {e}");
-            }
-        }
-        if let Some(w) = self.mixed {
-            if let Err(e) = w.finalize() {
-                warn!("channel_writer: mixed finalize failed: {e}");
             }
         }
         info!("channel_writer: finalized channel WAVs in {:?}", self.dir);
