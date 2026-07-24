@@ -72,6 +72,14 @@ export function useRecordingStop(
   // Promise to track recording-stopped event data (fixes race condition with recording-stop-complete)
   const recordingStoppedDataRef = useRef<Promise<void> | null>(null);
 
+  // recording-stopped is the Rust stop flow's LAST step — it fires only after
+  // the transcription queue is fully drained and every transcript-update has
+  // been emitted. The save below must not run before it: the queue-status poll
+  // can read "empty + idle" in the window before the stop-flush enqueues the
+  // final utterance, which intermittently trimmed the last seconds from saved
+  // transcripts (fast transcription hid it; slow runs lost the tail).
+  const recordingStoppedReceivedRef = useRef(false);
+
   // Set up recording-stopped listener for meeting navigation
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
@@ -84,6 +92,7 @@ export function useRecordingStop(
           folder_path?: string;
           meeting_name?: string;
         }>('recording-stopped', async (event) => {
+          recordingStoppedReceivedRef.current = true;
           // Create promise that resolves when sessionStorage is set (prevents race condition)
           recordingStoppedDataRef.current = (async () => {
             const { folder_path, meeting_name } = event.payload;
@@ -125,6 +134,9 @@ export function useRecordingStop(
       return;
     }
     stopInProgressRef.current = true;
+    // Fresh gate for this session's recording-stopped (the Rust stop flow
+    // takes seconds, so the event cannot beat this reset).
+    recordingStoppedReceivedRef.current = false;
 
     // Set status to STOPPING immediately
     setStatus(RecordingStatus.STOPPING);
@@ -152,26 +164,42 @@ export function useRecordingStop(
       let transcriptionComplete = false;
 
       // Listen for transcription-complete event
+      let engineReportedComplete = false;
       const unlistenComplete = await listen('transcription-complete', () => {
         console.log('Received transcription-complete event');
-        transcriptionComplete = true;
+        engineReportedComplete = true;
       });
+
+      // Deterministic gate: recording-stopped fires only after the Rust stop
+      // flow has drained the transcription queue, so no completion signal is
+      // trusted before it. Fallback below keeps the old heuristic if the event
+      // somehow never arrives.
+      const STOPPED_EVENT_FALLBACK_MS = 30000;
 
       // Poll for transcription status
       while (elapsedTime < MAX_WAIT_TIME && !transcriptionComplete) {
         try {
+          const stopped = recordingStoppedReceivedRef.current;
+          const trustSignals = stopped || elapsedTime >= STOPPED_EVENT_FALLBACK_MS;
+
+          if (engineReportedComplete && trustSignals) {
+            console.log('Transcription complete (engine event, recording-stopped:', stopped, ')');
+            transcriptionComplete = true;
+            break;
+          }
+
           const status = await transcriptService.getTranscriptionStatus();
-          console.log('Transcription status:', status);
+          console.log('Transcription status:', status, 'recording-stopped:', stopped);
 
           // Check if transcription is complete
-          if (!status.is_processing && status.chunks_in_queue === 0) {
+          if (trustSignals && !status.is_processing && status.chunks_in_queue === 0) {
             console.log('Transcription complete - no active processing and no chunks in queue');
             transcriptionComplete = true;
             break;
           }
 
           // If no activity for more than 8 seconds and no chunks in queue, consider it done (increased from 5s to 8s)
-          if (status.last_activity_ms > 8000 && status.chunks_in_queue === 0) {
+          if (trustSignals && status.last_activity_ms > 8000 && status.chunks_in_queue === 0) {
             console.log('Transcription likely complete - no recent activity and empty queue');
             transcriptionComplete = true;
             break;
