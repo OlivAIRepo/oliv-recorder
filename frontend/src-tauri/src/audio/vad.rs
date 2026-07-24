@@ -47,7 +47,12 @@ impl ContinuousVadProcessor {
         // Previous: capped at 400ms, causing VAD to fragment 5-second speech into 40ms segments
         // New: Use full redemption_time from pipeline (2000ms) to bridge natural pauses
         config.redemption_time = Duration::from_millis(redemption_time_ms as u64);
-        config.pre_speech_pad = Duration::from_millis(300);   // Pre-speech padding for context
+        // Pre-speech padding: audio back-filled once speech is detected. 1s (was
+        // 300ms) because onset detection lags at recording start — the loudness
+        // normalizer ramps from neutral gain toward -23 LUFS and silero needs
+        // context, so the first words sat below the speech threshold and the
+        // opening seconds of meetings were never transcribed.
+        config.pre_speech_pad = Duration::from_millis(1000);
         config.post_speech_pad = Duration::from_millis(400);  // Increased: more context at end
 
         // CRITICAL FIX: Increased min_speech_time to prevent tiny 40ms fragments
