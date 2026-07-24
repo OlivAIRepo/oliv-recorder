@@ -93,6 +93,12 @@ impl AudioMixerRingBuffer {
         if !self.can_mix() {
             return None;
         }
+        self.extract_padded()
+    }
+
+    /// Drain up to one window from each buffer, zero-padding whichever side is
+    /// short. Callers gate on can_mix() (steady state) or non-empty (stop drain).
+    fn extract_padded(&mut self) -> Option<(Vec<f32>, Vec<f32>)> {
 
         // Extract mic window with zero-padding for incomplete buffers
         // Zero-padding (silence) is preferred over last-sample-hold to prevent artifacts
@@ -140,6 +146,14 @@ impl AudioMixerRingBuffer {
         Some((mic_window, sys_window))
     }
 
+    /// Stop-time drain: extract whatever is left even when neither buffer has a
+    /// full window (extract_window pads to window size). None once both are empty.
+    fn extract_remainder(&mut self) -> Option<(Vec<f32>, Vec<f32>)> {
+        if self.mic_buffer.is_empty() && self.system_buffer.is_empty() {
+            return None;
+        }
+        self.extract_padded()
+    }
 }
 
 /// Simplified audio capture without broadcast channels
@@ -758,6 +772,12 @@ impl AudioPipeline {
                     // Multiple flush signals may be sent to ensure processing
                     if chunk.chunk_id >= u64::MAX - 10 {
                         info!("📥 Received FLUSH signal #{} - flushing VAD processor", u64::MAX - chunk.chunk_id);
+                        // Drain the ring buffer's sub-window residue (audio below the
+                        // 600ms mixing threshold would otherwise never be extracted —
+                        // it was silently dropped from the tail of every recording).
+                        while let Some((mic_window, sys_window)) = self.ring_buffer.extract_remainder() {
+                            self.process_window(&mut echo_canceller, mic_window, sys_window, chunk.timestamp);
+                        }
                         self.flush_remaining_audio()?;
                         // Continue processing to handle any remaining chunks
                         continue;
@@ -798,79 +818,7 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
-                            // Sensitive meeting: checked per mixing window so the toggle can
-                            // flip mid-call. While ON, the other side is scrubbed from every
-                            // capture surface — system.wav, the stereo playback track's right
-                            // channel (audio.mp4), and the system-channel transcription — by
-                            // eliding or substituting silence (keeps everything timeline-
-                            // aligned; the flip shows as a muted gap).
-                            let sensitive = crate::ingest::is_sensitive();
-                            // Feed the session-wide full/partial/none aggregate
-                            // reported at session end.
-                            crate::ingest::note_capture_window(sensitive);
-
-                            // Capture the cleaned channels separately (before mixing) for S3
-                            // upload. Echo-cancel the mic against the system reference (no-op
-                            // unless OLIV_AEC_ENABLED) so mic.wav carries the user's voice.
-                            // IMPORTANT: the AEC must always get the REAL system reference —
-                            // even when sensitive — or the far side's speaker bleed would leak
-                            // into the mic channel uncancelled.
-                            let mic_clean = echo_canceller.process(&mic_window, &sys_window);
-                            let silence: Vec<f32>;
-                            let sys_capture: &[f32] = if sensitive {
-                                silence = vec![0.0; sys_window.len()];
-                                &silence
-                            } else {
-                                &sys_window
-                            };
-                            if let Some(cw) = self.channel_writer.as_mut() {
-                                cw.write_mic(&mic_clean);
-                                if sensitive {
-                                    // Elide rather than write silence: a meeting
-                                    // that is sensitive from start to end (or to
-                                    // the end) produces no/shorter system.wav.
-                                    cw.skip_system(sys_window.len());
-                                } else {
-                                    cw.write_system(&sys_window);
-                                }
-                            }
-
-                            // STEP 3: Per-channel transcription so each segment carries the
-                            // right speaker — mic → "Me", system → "Them". On headphones the
-                            // channels are cleanly separated; on speakers the far side may
-                            // bleed into the mic (handled properly by AEC, not here).
-                            let mic_segments = self.vad_processor.process_audio(&mic_clean);
-                            self.dispatch_segments(mic_segments, DeviceType::Microphone);
-
-                            // Sensitive: the system VAD is fed silence (keeps its sample
-                            // timeline running) and anything it still emits — e.g. an
-                            // utterance in flight when the toggle flipped — is dropped, so
-                            // no "Them" segment is ever produced while sensitive is on.
-                            let sys_segments = self.sys_vad_processor.process_audio(sys_capture);
-                            if !sensitive {
-                                self.dispatch_segments(sys_segments, DeviceType::System);
-                            }
-
-                            // STEP 4: Send the playback track to the recording saver as
-                            // interleaved stereo frames — cleaned mic on the left, system
-                            // (sensitive-scrubbed) on the right. Encoded to stereo AAC
-                            // (audio.mp4), which replaces the old mono mix and the
-                            // uncompressed mixed.wav as the uploaded "mixed" channel.
-                            if let Some(ref sender) = self.recording_sender_for_mixed {
-                                let mut stereo = Vec::with_capacity(mic_clean.len() * 2);
-                                for i in 0..mic_clean.len().max(sys_capture.len()) {
-                                    stereo.push(mic_clean.get(i).copied().unwrap_or(0.0));
-                                    stereo.push(sys_capture.get(i).copied().unwrap_or(0.0));
-                                }
-                                let recording_chunk = AudioChunk {
-                                    data: stereo,
-                                    sample_rate: self.sample_rate,
-                                    timestamp: chunk.timestamp,
-                                    chunk_id: self.chunk_id_counter,
-                                    device_type: DeviceType::Microphone,  // Mixed audio
-                                };
-                                let _ = sender.send(recording_chunk);
-                            }
+                            self.process_window(&mut echo_canceller, mic_window, sys_window, chunk.timestamp);
                         }
                     }
                 }
@@ -895,6 +843,91 @@ impl AudioPipeline {
 
         info!("VAD-driven audio pipeline ended");
         Ok(())
+    }
+
+    /// Process one aligned (mic, system) window: sensitive scrubbing, echo
+    /// cancellation, channel WAV capture, per-channel VAD → transcription, and
+    /// the interleaved stereo playback track. Called from the main mixing loop
+    /// and from the stop-flush drain of the ring buffer's sub-window residue.
+    fn process_window(
+        &mut self,
+        echo_canceller: &mut super::echo_canceller::EchoCanceller,
+        mic_window: Vec<f32>,
+        sys_window: Vec<f32>,
+        timestamp: f64,
+    ) {
+        // Sensitive meeting: checked per mixing window so the toggle can
+        // flip mid-call. While ON, the other side is scrubbed from every
+        // capture surface — system.wav, the stereo playback track's right
+        // channel (audio.mp4), and the system-channel transcription — by
+        // eliding or substituting silence (keeps everything timeline-
+        // aligned; the flip shows as a muted gap).
+        let sensitive = crate::ingest::is_sensitive();
+        // Feed the session-wide full/partial/none aggregate reported at
+        // session end.
+        crate::ingest::note_capture_window(sensitive);
+
+        // Echo-cancel the mic against the system reference (no-op unless
+        // OLIV_AEC_ENABLED) so the mic channel carries the user's voice.
+        // IMPORTANT: the AEC must always get the REAL system reference —
+        // even when sensitive — or the far side's speaker bleed would leak
+        // into the mic channel uncancelled.
+        let mic_clean = echo_canceller.process(&mic_window, &sys_window);
+        let silence: Vec<f32>;
+        let sys_capture: &[f32] = if sensitive {
+            silence = vec![0.0; sys_window.len()];
+            &silence
+        } else {
+            &sys_window
+        };
+        // Debug-only channel WAVs (OLIV_WRITE_CHANNEL_WAVS) — normal runs rely
+        // solely on the stereo audio.mp4.
+        if let Some(cw) = self.channel_writer.as_mut() {
+            cw.write_mic(&mic_clean);
+            if sensitive {
+                // Elide rather than write silence: a meeting that is sensitive
+                // from start to end (or to the end) produces no/shorter
+                // system.wav.
+                cw.skip_system(sys_window.len());
+            } else {
+                cw.write_system(&sys_window);
+            }
+        }
+
+        // Per-channel transcription so each segment carries the right speaker —
+        // mic → "Me", system → "Them". On headphones the channels are cleanly
+        // separated; on speakers the far side may bleed into the mic (handled
+        // properly by AEC, not here).
+        let mic_segments = self.vad_processor.process_audio(&mic_clean);
+        self.dispatch_segments(mic_segments, DeviceType::Microphone);
+
+        // Sensitive: the system VAD is fed silence (keeps its sample timeline
+        // running) and anything it still emits — e.g. an utterance in flight
+        // when the toggle flipped — is dropped, so no "Them" segment is ever
+        // produced while sensitive is on.
+        let sys_segments = self.sys_vad_processor.process_audio(sys_capture);
+        if !sensitive {
+            self.dispatch_segments(sys_segments, DeviceType::System);
+        }
+
+        // Playback track to the recording saver as interleaved stereo frames —
+        // cleaned mic on the left, system (sensitive-scrubbed) on the right.
+        // Encoded to stereo AAC (audio.mp4), the single uploaded audio file.
+        if let Some(ref sender) = self.recording_sender_for_mixed {
+            let mut stereo = Vec::with_capacity(mic_clean.len() * 2);
+            for i in 0..mic_clean.len().max(sys_capture.len()) {
+                stereo.push(mic_clean.get(i).copied().unwrap_or(0.0));
+                stereo.push(sys_capture.get(i).copied().unwrap_or(0.0));
+            }
+            let recording_chunk = AudioChunk {
+                data: stereo,
+                sample_rate: self.sample_rate,
+                timestamp,
+                chunk_id: self.chunk_id_counter,
+                device_type: DeviceType::Microphone, // Mixed audio
+            };
+            let _ = sender.send(recording_chunk);
+        }
     }
 
     fn flush_remaining_audio(&mut self) -> Result<()> {

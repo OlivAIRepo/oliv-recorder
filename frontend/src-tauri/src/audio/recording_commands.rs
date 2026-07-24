@@ -501,24 +501,27 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Step 1: Stop audio capture immediately (no more new chunks) with proper error handling
-    let manager_for_cleanup = {
+    let manager_taken = {
         let mut global_manager = RECORDING_MANAGER.lock().unwrap();
         global_manager.take()
     };
 
-    let stop_result = if let Some(mut manager) = manager_for_cleanup {
+    let stop_result = if let Some(mut manager) = manager_taken {
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
         info!("🚀 Using FORCE FLUSH to eliminate pipeline accumulation delays");
         let result = manager.stop_streams_and_force_flush().await;
-        // Store manager back for later cleanup
-        let manager_for_cleanup = Some(manager);
-        (result, manager_for_cleanup)
+        // CRITICAL: put the manager BACK into the global for the duration of the
+        // Step-2 transcription drain. The final utterance is, by definition,
+        // still in the transcription queue at stop time; its transcript-update
+        // events land in the persistence listener, whose body reads
+        // RECORDING_MANAGER — with the global empty those events no-op'd and the
+        // last ~2-3s of speech silently vanished from transcripts.json.
+        *RECORDING_MANAGER.lock().unwrap() = Some(manager);
+        result
     } else {
         warn!("No recording manager found to stop");
-        (Ok(()), None)
+        Ok(())
     };
-
-    let (stop_result, manager_for_cleanup) = stop_result;
 
     match stop_result {
         Ok(_) => {
@@ -527,16 +530,6 @@ pub async fn stop_recording<R: Runtime>(
         Err(e) => {
             error!("❌ Failed to stop audio streams: {}", e);
             return Err(format!("Failed to stop audio streams: {}", e));
-        }
-    }
-
-    // Step 1.5: Clean up transcript listener to release microphone
-    // Unlisten transcript-update event to prevent lingering references
-    {
-        use tauri::Listener;
-        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
-            app.unlisten(listener_id);
-            info!("✅ Transcript-update listener removed");
         }
     }
 
@@ -605,6 +598,22 @@ pub async fn stop_recording<R: Runtime>(
     } else {
         info!("ℹ️ No transcription task found to wait for");
     }
+
+    // Step 2.6: transcription drain complete — every transcript-update has been
+    // delivered and persisted. Now it's safe to remove the persistence listener
+    // and reclaim the manager for save/cleanup. (This used to happen BEFORE the
+    // drain, which dropped the final segments from transcripts.json.)
+    {
+        use tauri::Listener;
+        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
+            app.unlisten(listener_id);
+            info!("✅ Transcript-update listener removed (after drain)");
+        }
+    }
+    let manager_for_cleanup = {
+        let mut global_manager = RECORDING_MANAGER.lock().unwrap();
+        global_manager.take()
+    };
 
     // Step 3: Now safely unload Whisper model after ALL chunks are processed
     let _ = app.emit(
