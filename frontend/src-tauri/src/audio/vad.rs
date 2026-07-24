@@ -20,6 +20,10 @@ pub struct ContinuousVadProcessor {
     // a VAD panic must never unwind the audio pipeline task (it would silently
     // kill capture + transcription for the rest of the recording).
     config: VadConfig,
+    // Recording-timeline offset (ms) of the current silero session's t=0.
+    // Non-zero only after a panic rebuild, so post-rebuild segment timestamps
+    // remain monotonic on the recording timeline.
+    session_epoch_ms: f64,
     chunk_size: usize,
     sample_rate: u32,
     buffer: Vec<f32>,
@@ -51,12 +55,16 @@ impl ContinuousVadProcessor {
         // Previous: capped at 400ms, causing VAD to fragment 5-second speech into 40ms segments
         // New: Use full redemption_time from pipeline (2000ms) to bridge natural pauses
         config.redemption_time = Duration::from_millis(redemption_time_ms as u64);
-        // Pre-speech padding: audio back-filled once speech is detected. 1s (was
-        // 300ms) because onset detection lags at recording start — the loudness
-        // normalizer ramps from neutral gain toward -23 LUFS and silero needs
-        // context, so the first words sat below the speech threshold and the
-        // opening seconds of meetings were never transcribed.
-        config.pre_speech_pad = Duration::from_millis(1000);
+        // Pre-speech padding: audio back-filled once speech is detected.
+        // KEEP AT 300ms: raising it to 1s (0.3.26/27, to recover onset-lagged
+        // opening words) made silero panic whenever speech resumed within the
+        // pad of the previous utterance — even at upstream 8f7cc8c, which was
+        // supposed to clamp that. Each panic drops an utterance (containment
+        // rebuilds the session), which lost mid-meeting transcript around
+        // speaker turns. 300ms has months of panic-free production behind it.
+        // Recording-start onset loss needs a different fix (e.g. seeding the
+        // loudness normalizer's gain), not a bigger pad.
+        config.pre_speech_pad = Duration::from_millis(300);
         config.post_speech_pad = Duration::from_millis(400);  // Increased: more context at end
 
         // CRITICAL FIX: Increased min_speech_time to prevent tiny 40ms fragments
@@ -79,6 +87,7 @@ impl ContinuousVadProcessor {
         Ok(Self {
             session,
             config,
+            session_epoch_ms: 0.0,
             chunk_size: vad_chunk_size,
             sample_rate: input_sample_rate, // Store input rate for resampling ratio in resample_to_16k()
             buffer: Vec::with_capacity(vad_chunk_size * 2),
@@ -245,12 +254,21 @@ impl ContinuousVadProcessor {
         }));
         let transitions = match processed {
             Ok(r) => r.map_err(|e| anyhow!("VAD processing failed: {}", e))?,
-            Err(_) => {
-                error!("VAD panicked — rebuilding VAD session; current utterance may be lost");
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string panic payload".to_string());
+                error!("VAD panicked ({msg}) — rebuilding VAD session; current utterance may be lost");
                 match VadSession::new(self.config.clone()) {
                     Ok(fresh) => self.session = fresh,
                     Err(e) => return Err(anyhow!("VAD session rebuild failed: {:?}", e)),
                 }
+                // The fresh session's clock restarts at 0 — remember where we
+                // are on the recording timeline so segment timestamps stay
+                // monotonic (they feed transcript ordering).
+                self.session_epoch_ms = (self.processed_samples as f64 / 16.0).round();
                 self.in_speech = false;
                 self.current_speech.clear();
                 return Ok(());
@@ -294,8 +312,8 @@ impl ContinuousVadProcessor {
                     if !speech_samples.is_empty() {
                         let segment = SpeechSegment {
                             samples: speech_samples,
-                            start_timestamp_ms: start_timestamp_ms as f64,
-                            end_timestamp_ms: end_timestamp_ms as f64,
+                            start_timestamp_ms: self.session_epoch_ms + start_timestamp_ms as f64,
+                            end_timestamp_ms: self.session_epoch_ms + end_timestamp_ms as f64,
                             confidence: 0.9, // VAD confidence
                         };
 
