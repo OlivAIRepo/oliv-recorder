@@ -1,11 +1,14 @@
 //! Mic-in-use meeting detection (macOS + Windows).
 //!
-//! Polls for the process currently capturing the microphone. When a whitelisted
-//! meeting app — or a browser hosting a web meeting (Google Meet, ClickUp, …) —
-//! starts using the mic, the floating prompt is shown and `meeting-detected` is
-//! emitted; on release `meeting-ended` is emitted. Edge-triggered (one event per
-//! transition). The prompt UI and the start/continue/end flow are identical on
-//! both platforms — only the detection backend differs:
+//! Polls for the SET of processes currently capturing the microphone. When a
+//! whitelisted meeting app — or a browser hosting a web meeting (Google Meet,
+//! ClickUp, …) — starts using the mic, the floating prompt is shown and
+//! `meeting-detected` is emitted; edges are per-source, so switching apps with
+//! no mic-free gap or starting a second simultaneous call re-prompts (unless
+//! already transcribing — never two recordings at once). On release,
+//! `meeting-ended` is emitted only for the app the recording was started for
+//! (any release, for manual starts). The prompt UI and the start/continue/end
+//! flow are identical on both platforms — only the detection backend differs:
 //!   * macOS   — CoreAudio process taps (cidre), matched by bundle id.
 //!   * Windows — the CapabilityAccessManager ConsentStore registry (the same
 //!     signal Windows uses for its mic-in-use indicator), matched by exe name.
@@ -117,8 +120,12 @@ async fn refresh_whitelist() {
 // macOS detection — CoreAudio process taps.
 // ---------------------------------------------------------------------------
 
+/// Every whitelisted meeting source currently capturing the mic, deduped by
+/// source id. All browsers collapse into one "Browser meeting" pseudo-source
+/// (the capturing helper's id varies, so individual web meetings can't be told
+/// apart). Multiple simultaneous meetings each get their own entry.
 #[cfg(target_os = "macos")]
-fn detect() -> Option<(String, String)> {
+fn detect_all() -> Vec<(String, String)> {
     use cidre::{core_audio as ca, ns};
 
     /// Our own bundle id — never treat the recorder's own mic use as a meeting.
@@ -131,13 +138,16 @@ fn detect() -> Option<(String, String)> {
             .and_then(|a| a.localized_name().map(|s| s.to_string()))
     }
 
-    let processes = ca::System::processes().ok()?;
+    let Ok(processes) = ca::System::processes() else {
+        return Vec::new();
+    };
     let (bundle_ids, browser_meet) = {
         let cfg = CONFIG.lock().unwrap();
         (cfg.bundle_ids.clone(), cfg.browser_meet)
     };
     let debug = std::env::var("OLIV_MIC_DEBUG").is_ok();
 
+    let mut found: Vec<(String, String)> = Vec::new();
     let mut browser_hit = false;
     for p in &processes {
         if !p.is_running_input().unwrap_or(false) {
@@ -161,17 +171,20 @@ fn detect() -> Option<(String, String)> {
                 .iter()
                 .any(|w| bl == *w || bl.starts_with(&format!("{w}.")))
         {
-            let disp = if name.is_empty() { bundle.clone() } else { name };
-            return Some((disp, bundle));
+            if !found.iter().any(|(_, s)| *s == bundle) {
+                let disp = if name.is_empty() { bundle.clone() } else { name };
+                found.push((disp, bundle));
+            }
+            continue;
         }
         if browser_meet && (is_browser(&bl) || is_browser(&nl)) {
             browser_hit = true;
         }
     }
     if browser_hit {
-        return Some(("Browser meeting".to_string(), "browser:meeting".to_string()));
+        found.push(("Browser meeting".to_string(), "browser:meeting".to_string()));
     }
-    None
+    found
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +195,7 @@ fn detect() -> Option<(String, String)> {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
-fn detect() -> Option<(String, String)> {
+fn detect_all() -> Vec<(String, String)> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
@@ -215,12 +228,13 @@ fn detect() -> Option<(String, String)> {
     let debug = std::env::var("OLIV_MIC_DEBUG").is_ok();
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let base = hkcu
-        .open_subkey(
-            r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone",
-        )
-        .ok()?;
+    let Ok(base) = hkcu.open_subkey(
+        r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone",
+    ) else {
+        return Vec::new();
+    };
 
+    let mut found: Vec<(String, String)> = Vec::new();
     let mut browser_hit = false;
 
     // Desktop (NonPackaged) apps: subkey name is the exe path with '#' for '\'.
@@ -243,7 +257,10 @@ fn detect() -> Option<(String, String)> {
                 log::info!("mic_monitor[debug]: mic-input exe='{exe}'");
             }
             if let Some(disp) = meeting_exe_label(&exe) {
-                return Some((disp.to_string(), exe));
+                if !found.iter().any(|(_, s)| *s == exe) {
+                    found.push((disp.to_string(), exe));
+                }
+                continue;
             }
             if browser_meet && is_browser(&exe) {
                 browser_hit = true;
@@ -268,7 +285,10 @@ fn detect() -> Option<(String, String)> {
             log::info!("mic_monitor[debug]: mic-input package='{name}'");
         }
         if let Some(disp) = meeting_pkg_label(&nl) {
-            return Some((disp.to_string(), name));
+            if !found.iter().any(|(_, s)| *s == name) {
+                found.push((disp.to_string(), name));
+            }
+            continue;
         }
         if browser_meet && is_browser(&nl) {
             browser_hit = true;
@@ -276,14 +296,14 @@ fn detect() -> Option<(String, String)> {
     }
 
     if browser_hit {
-        return Some(("Browser meeting".to_string(), "browser:meeting".to_string()));
+        found.push(("Browser meeting".to_string(), "browser:meeting".to_string()));
     }
-    None
+    found
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn detect() -> Option<(String, String)> {
-    None
+fn detect_all() -> Vec<(String, String)> {
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -343,56 +363,75 @@ fn run<R: Runtime>(app: AppHandle<R>) {
         }
     });
 
-    // Edge-triggered mic-in-use detection.
+    // Edge-triggered mic-in-use detection over the SET of capturing sources —
+    // not a single boolean — so a second meeting starting while another app
+    // still holds the mic (Zoom → Meet with no observable gap, or two calls at
+    // once) still re-prompts, and end-detection can be scoped to the app the
+    // recording was actually started for.
     std::thread::spawn(move || {
-        let mut present = false;
+        // Sources observed capturing the mic on the previous poll.
+        let mut last: Vec<(String, String)> = Vec::new();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
-            match detect() {
-                Some((name, source)) => {
-                    if !present {
-                        present = true;
-                        // Only prompt logged-in users — transcription needs an account.
-                        if crate::auth::ic_token().is_some() {
-                            let app2 = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                // Already transcribing (back-to-back call) → don't
-                                // re-prompt; tell the prompt to cancel any pending
-                                // auto-end so we keep recording into the next call.
-                                if crate::is_recording().await {
-                                    let _ = app2.emit("meeting-resumed", serde_json::json!({}));
-                                    return;
-                                }
-                                log::info!("mic_monitor: meeting detected — {name} ({source})");
-                                show_prompt_window(&app2);
-                                let _ = app2.emit(
-                                    "meeting-detected",
-                                    serde_json::json!({
-                                        "app": name,
-                                        "bundleId": source,
-                                        "sensitive": crate::ingest::is_sensitive(),
-                                    }),
-                                );
-                            });
-                        }
-                    }
-                }
-                None => {
-                    if present {
-                        present = false;
-                        // Mic released. If we're transcribing, show the persistent
-                        // Continue/End banner — never auto-stop, never native notify.
-                        let app2 = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if crate::is_recording().await {
-                                log::info!("mic_monitor: meeting ended — prompting continue/end");
-                                show_prompt_window(&app2);
-                                let _ = app2.emit("meeting-ended", serde_json::json!({}));
-                            }
-                        });
-                    }
-                }
+            let now = detect_all();
+            let appeared: Vec<(String, String)> = now
+                .iter()
+                .filter(|(_, s)| !last.iter().any(|(_, ls)| ls == s))
+                .cloned()
+                .collect();
+            let gone: Vec<(String, String)> = last
+                .iter()
+                .filter(|(_, s)| !now.iter().any(|(_, ns)| ns == s))
+                .cloned()
+                .collect();
+            let all_released = now.is_empty() && !last.is_empty();
+            last = now;
+            if appeared.is_empty() && gone.is_empty() {
+                continue;
             }
+            // Only prompt logged-in users — transcription needs an account.
+            if crate::auth::ic_token().is_none() {
+                continue;
+            }
+            let app2 = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let recording = crate::is_recording().await;
+                if recording {
+                    // A new call while transcribing (back-to-back / overlapping)
+                    // → never a second recording; cancel any pending auto-end so
+                    // we keep transcribing into it.
+                    if !appeared.is_empty() {
+                        let _ = app2.emit("meeting-resumed", serde_json::json!({}));
+                        return;
+                    }
+                    // Something released the mic. End-prompt only when it was
+                    // OUR meeting: the app the recording was started for (when
+                    // known), else — manual start — when no source is left.
+                    let ours_ended = match crate::ingest::source_app() {
+                        Some(recorded) => gone.iter().any(|(name, _)| *name == recorded),
+                        None => all_released,
+                    };
+                    if ours_ended {
+                        log::info!("mic_monitor: meeting ended — prompting continue/end");
+                        show_prompt_window(&app2);
+                        let _ = app2.emit("meeting-ended", serde_json::json!({}));
+                    }
+                } else if let Some((name, source)) = appeared.first() {
+                    // Not recording: every newly-appearing source is a fresh
+                    // chance to transcribe — including an app switch with no
+                    // mic-free gap and a second simultaneous meeting.
+                    log::info!("mic_monitor: meeting detected — {name} ({source})");
+                    show_prompt_window(&app2);
+                    let _ = app2.emit(
+                        "meeting-detected",
+                        serde_json::json!({
+                            "app": name,
+                            "bundleId": source,
+                            "sensitive": crate::ingest::is_sensitive(),
+                        }),
+                    );
+                }
+            });
         }
     });
     log::info!("mic_monitor: started");
