@@ -1,12 +1,12 @@
-//! Captures the cleaned audio channels to separate WAV files for end-of-call S3
-//! upload: `mic.wav` + `system.wav` (per-channel, used to reconstruct Me/Them in
-//! transcription). The playback "mixed" track is no longer written here — it's
-//! the recording saver's stereo `audio.mp4` (cleaned mic left, system right).
+//! DEBUG-ONLY per-channel WAV capture (`mic.wav` + `system.wav`), enabled with
+//! `OLIV_WRITE_CHANNEL_WAVS=1`. Production relies solely on the recording
+//! saver's stereo `audio.mp4` (cleaned mic left, system right) — the WAVs are
+//! no longer uploaded (dropped in 0.3.26) and are only useful for diagnostics
+//! and the AEC tuning harness (`tools/aec-replay`, with `OLIV_AEC_ENABLED=0`).
 //!
 //! We tap `mic_window` (cleaned mic) and `sys_window` (system) in the pipeline
 //! right before they are captured — never the raw mic. The two windows come from
-//! the same ring-buffer extraction, so the files stay timeline-aligned. Files
-//! land in the meeting folder; the ingest uploads them at `recording-stopped`.
+//! the same ring-buffer extraction, so the files stay timeline-aligned.
 //! Sensitive meetings are scrubbed upstream in the pipeline: while the toggle is
 //! on (it can flip mid-call) the system channel arrives here elided/silent, so
 //! every written file is safe by construction.
@@ -116,10 +116,19 @@ pub struct DualChannelWriter {
 }
 
 impl DualChannelWriter {
-    /// Some(..) iff a meeting folder was set for this recording.
+    /// Some(..) iff a meeting folder was set for this recording AND the
+    /// debug env `OLIV_WRITE_CHANNEL_WAVS` is enabled — normal recordings
+    /// write no per-channel WAVs.
     pub fn try_new(sample_rate: u32) -> Option<Self> {
+        let enabled = matches!(
+            std::env::var("OLIV_WRITE_CHANNEL_WAVS").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        );
+        if !enabled {
+            return None;
+        }
         let dir = channel_dir()?;
-        info!("channel_writer: capturing mic/system channels into {:?}", dir);
+        info!("channel_writer: debug WAV capture (mic/system) into {:?}", dir);
         Some(Self { mic: None, system: None, sample_rate, dir, system_gap: 0 })
     }
 

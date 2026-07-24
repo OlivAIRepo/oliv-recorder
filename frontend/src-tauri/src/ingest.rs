@@ -520,42 +520,15 @@ async fn upload_channel_with_retry(
     }
 }
 
-/// Upload the recording's audio from the meeting folder: mic.wav + system.wav
-/// (per-channel transcription) and the stereo audio.mp4 as the "mixed"
-/// playback channel. Sensitive scrubbing happens at capture time in the
-/// pipeline (the system channel is elided/silenced while the toggle is on),
-/// so every file here is already safe to upload as-is. Never the raw mic.
+/// Upload the recording's audio: ONLY the stereo audio.mp4 as the "mixed"
+/// channel — mic on the left, system on the right, so the server can split
+/// speakers with multichannel transcription. The per-channel WAV uploads
+/// (mic/system) were dropped in 0.3.26 (~190 MB/hr saved); the middleware
+/// transcribes the mixed track per channel instead. Sensitive scrubbing
+/// happens at capture time in the pipeline (the system/right channel is
+/// silenced while the toggle is on), so the file is safe to upload as-is.
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
-    let dir = Path::new(folder);
-
-    // The per-channel WAVs exist to be uploaded (server-side per-channel
-    // re-transcription); once a WAV's own upload has succeeded, its S3 copy is
-    // the durable one, so the large local file is deleted. audio.mp4 is always
-    // kept locally for playback (a separate 7-day retention pass in
-    // audio::cleanup prunes it later). A failed upload keeps its file on disk.
-    let mic = dir.join(crate::audio::channel_writer::MIC_WAV);
-    if mic.exists() {
-        if upload_channel_with_retry(token, session_id, "mic", &mic).await {
-            if let Err(e) = std::fs::remove_file(&mic) {
-                log::warn!("ingest: could not delete uploaded {}: {e}", mic.display());
-            }
-        }
-    } else {
-        log::warn!("ingest: {} not found — skipping mic upload", mic.display());
-    }
-    let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
-    if sys.exists() {
-        if upload_channel_with_retry(token, session_id, "system", &sys).await {
-            if let Err(e) = std::fs::remove_file(&sys) {
-                log::warn!("ingest: could not delete uploaded {}: {e}", sys.display());
-            }
-        }
-    }
-    // Stereo playback track (mic=left, system=right) — the single playback
-    // channel for the platform, channel-separable for multichannel
-    // transcription, and ~10x smaller than the old PCM mixed.wav since it's
-    // the recording saver's AAC audio.mp4.
-    let mixed = dir.join("audio.mp4");
+    let mixed = Path::new(folder).join("audio.mp4");
     if mixed.exists() {
         upload_channel_with_retry(token, session_id, "mixed", &mixed).await;
     } else {
