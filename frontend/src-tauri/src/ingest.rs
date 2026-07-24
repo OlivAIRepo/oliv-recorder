@@ -91,6 +91,13 @@ fn sensitive_level() -> &'static str {
 // start isn't mislabelled. None for manual starts.
 static SOURCE_APP: Mutex<Option<String>> = Mutex::new(None);
 
+/// Display name of the app the current recording was started for (None for
+/// manual starts). Used by the mic monitor to scope end-of-meeting detection
+/// to the recorded meeting when several calls hold the mic at once.
+pub fn source_app() -> Option<String> {
+    SOURCE_APP.lock().unwrap().clone()
+}
+
 /// Set by the meeting-detected prompt before an auto-started recording.
 #[tauri::command]
 pub fn oliv_set_source_app(app: Option<String>) {
@@ -266,7 +273,7 @@ fn segment_json(ev: &TranscriptEvent) -> serde_json::Value {
         "Them" => ("system", "Them"),
         _ => ("mixed", "Speaker"),
     };
-    json!({
+    let mut seg = json!({
         "seq": ev.sequence_id,
         "channel": channel,
         "speaker": speaker,
@@ -275,7 +282,14 @@ fn segment_json(ev: &TranscriptEvent) -> serde_json::Value {
         "end_ms": (ev.audio_end_time * 1000.0) as i64,
         "is_final": true,
         "confidence": ev.confidence,
-    })
+    });
+    // Mark segments captured while the sensitive toggle is on (mic-only
+    // stretches — "Them" is suppressed there). Absent when not sensitive, so
+    // normal transcripts are unchanged.
+    if is_sensitive() {
+        seg["sensitive"] = json!(true);
+    }
+    seg
 }
 
 async fn push_segment(ev: TranscriptEvent) {
@@ -468,9 +482,15 @@ async fn upload_channel(
 
 /// Upload a channel with bounded exponential backoff. The upload happens at
 /// end-of-call, when the server may be briefly unreachable (a deploy, a network
-/// blip); retrying rides those out. If every attempt fails the WAV still lives
+/// blip); retrying rides those out. If every attempt fails the file still lives
 /// on disk in the recording folder — it's never lost, just not uploaded.
-async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str, path: &Path) {
+/// Returns true iff the upload (and attach) succeeded.
+async fn upload_channel_with_retry(
+    token: &str,
+    session_id: &str,
+    channel: &str,
+    path: &Path,
+) -> bool {
     // ~112s total window across 6 attempts — covers a short deploy/outage.
     const BACKOFF_SECS: [u64; 5] = [2, 5, 15, 30, 60];
     let mut attempt = 0usize;
@@ -478,7 +498,7 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
         match upload_channel(token, session_id, channel, path).await {
             Ok(()) => {
                 log::info!("ingest: uploaded {channel} channel");
-                return;
+                return true;
             }
             Err(e) if attempt < BACKOFF_SECS.len() => {
                 let delay = BACKOFF_SECS[attempt];
@@ -491,10 +511,10 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
             }
             Err(e) => {
                 log::warn!(
-                    "ingest: {channel} upload failed after {} attempts — giving up (WAV kept on disk): {e}",
+                    "ingest: {channel} upload failed after {} attempts — giving up (file kept on disk): {e}",
                     attempt + 1
                 );
-                return;
+                return false;
             }
         }
     }
@@ -508,15 +528,28 @@ async fn upload_channel_with_retry(token: &str, session_id: &str, channel: &str,
 async fn upload_audio(token: &str, session_id: &str, folder: &str) {
     let dir = Path::new(folder);
 
+    // The per-channel WAVs exist to be uploaded (server-side per-channel
+    // re-transcription); once a WAV's own upload has succeeded, its S3 copy is
+    // the durable one, so the large local file is deleted. audio.mp4 is always
+    // kept locally for playback (a separate 7-day retention pass in
+    // audio::cleanup prunes it later). A failed upload keeps its file on disk.
     let mic = dir.join(crate::audio::channel_writer::MIC_WAV);
     if mic.exists() {
-        upload_channel_with_retry(token, session_id, "mic", &mic).await;
+        if upload_channel_with_retry(token, session_id, "mic", &mic).await {
+            if let Err(e) = std::fs::remove_file(&mic) {
+                log::warn!("ingest: could not delete uploaded {}: {e}", mic.display());
+            }
+        }
     } else {
         log::warn!("ingest: {} not found — skipping mic upload", mic.display());
     }
     let sys = dir.join(crate::audio::channel_writer::SYSTEM_WAV);
     if sys.exists() {
-        upload_channel_with_retry(token, session_id, "system", &sys).await;
+        if upload_channel_with_retry(token, session_id, "system", &sys).await {
+            if let Err(e) = std::fs::remove_file(&sys) {
+                log::warn!("ingest: could not delete uploaded {}: {e}", sys.display());
+            }
+        }
     }
     // Stereo playback track (mic=left, system=right) — the single playback
     // channel for the platform, channel-separable for multichannel

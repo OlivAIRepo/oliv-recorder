@@ -696,6 +696,9 @@ pub fn run() {
             // can offer to start recording (emits `meeting-detected`).
             crate::audio::mic_monitor::init(&_app.handle());
 
+            // Prune local meeting audio older than the retention window.
+            crate::audio::cleanup::init(&_app.handle());
+
             // Oliv login deep link: olivrecorder://auth-callback?ic_token=...
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
