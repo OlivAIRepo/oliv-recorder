@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use silero_rs::{VadConfig, VadSession, VadTransition};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -16,6 +16,10 @@ pub struct SpeechSegment {
 /// Processes audio in 30ms chunks but returns complete speech segments
 pub struct ContinuousVadProcessor {
     session: VadSession,
+    // Kept (VadConfig is Copy) so the session can be rebuilt if silero panics —
+    // a VAD panic must never unwind the audio pipeline task (it would silently
+    // kill capture + transcription for the rest of the recording).
+    config: VadConfig,
     chunk_size: usize,
     sample_rate: u32,
     buffer: Vec<f32>,
@@ -74,6 +78,7 @@ impl ContinuousVadProcessor {
 
         Ok(Self {
             session,
+            config,
             chunk_size: vad_chunk_size,
             sample_rate: input_sample_rate, // Store input rate for resampling ratio in resample_to_16k()
             buffer: Vec::with_capacity(vad_chunk_size * 2),
@@ -230,8 +235,27 @@ impl ContinuousVadProcessor {
                   current_speech_size, current_speech_size as f64 / 16000.0);
         }
 
-        let transitions = self.session.process(chunk)
-            .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
+        // Contain silero panics: a panic here would unwind the whole pipeline
+        // task, ending capture + transcription for the rest of the recording
+        // (observed with the pre-speech-pad indexing panic, fixed upstream in
+        // 8f7cc8c but guarded regardless). On panic: rebuild the session and
+        // drop this chunk — losing one utterance beats losing the meeting.
+        let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.session.process(chunk)
+        }));
+        let transitions = match processed {
+            Ok(r) => r.map_err(|e| anyhow!("VAD processing failed: {}", e))?,
+            Err(_) => {
+                error!("VAD panicked — rebuilding VAD session; current utterance may be lost");
+                match VadSession::new(self.config.clone()) {
+                    Ok(fresh) => self.session = fresh,
+                    Err(e) => return Err(anyhow!("VAD session rebuild failed: {:?}", e)),
+                }
+                self.in_speech = false;
+                self.current_speech.clear();
+                return Ok(());
+            }
+        };
 
         // Log transitions for debugging
         if !transitions.is_empty() {
