@@ -25,6 +25,7 @@ pub mod recording_preferences;
 pub mod recording_saver;
 pub mod incremental_saver;  // NEW: Incremental audio saving with checkpoints
 pub mod channel_writer;     // NEW: separate cleaned mic/system WAVs for S3 upload
+pub mod cleanup;            // Local audio retention (post-upload + 7-day prune)
 pub mod level_monitor;
 pub mod simple_level_monitor;
 pub mod buffer_pool;
