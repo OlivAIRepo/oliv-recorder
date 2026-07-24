@@ -16,6 +16,7 @@
   var COUNTDOWN = 10;
   var mode = "detect"; // "detect" | "ended"
   var currentApp = "a meeting app";
+  var currentSource = ""; // bundle id / exe of the meeting the countdown is for
   var seconds = COUNTDOWN;
   var timer = null;
   var done = false;
@@ -81,9 +82,10 @@
   }
 
   // --- Meeting detected: 10s → auto Start. Mic-only toggle shown. ---
-  function renderDetect(app, sensitive) {
+  function renderDetect(app, sensitive, source) {
     mode = "detect";
     currentApp = app || "a meeting app";
+    currentSource = source || "";
     titleEl.textContent = "Meeting detected";
     sensitiveRow.classList.remove("hidden");
     sensitiveEl.checked = !!sensitive; // seed from the app's current toggle
@@ -120,7 +122,17 @@
 
   listen("meeting-detected", function (e) {
     var p = (e && e.payload) || {};
-    renderDetect(p.app, p.sensitive);
+    renderDetect(p.app, p.sensitive, p.bundleId);
+  });
+  // The meeting this countdown is for ended before the user (or the timer)
+  // started transcription — cancel instead of auto-starting a dead meeting.
+  listen("meeting-gone", function (e) {
+    var sources = ((e && e.payload) || {}).sources || [];
+    if (mode === "detect" && !done && sources.indexOf(currentSource) !== -1) {
+      done = true;
+      stopTimer();
+      close();
+    }
   });
   listen("meeting-ended", function () {
     renderEnded();

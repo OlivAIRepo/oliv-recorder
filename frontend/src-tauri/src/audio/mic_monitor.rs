@@ -416,20 +416,35 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                         show_prompt_window(&app2);
                         let _ = app2.emit("meeting-ended", serde_json::json!({}));
                     }
-                } else if let Some((name, source)) = appeared.first() {
-                    // Not recording: every newly-appearing source is a fresh
-                    // chance to transcribe — including an app switch with no
-                    // mic-free gap and a second simultaneous meeting.
-                    log::info!("mic_monitor: meeting detected — {name} ({source})");
-                    show_prompt_window(&app2);
-                    let _ = app2.emit(
-                        "meeting-detected",
-                        serde_json::json!({
-                            "app": name,
-                            "bundleId": source,
-                            "sensitive": crate::ingest::is_sensitive(),
-                        }),
-                    );
+                } else {
+                    // Not recording: a source that stopped capturing may be the
+                    // one the countdown prompt is offering to record (user left
+                    // the meeting before the 10s auto-start) — tell the prompt
+                    // so it cancels instead of auto-starting a dead meeting.
+                    if !gone.is_empty() {
+                        let sources: Vec<&str> =
+                            gone.iter().map(|(_, s)| s.as_str()).collect();
+                        log::info!("mic_monitor: source(s) gone before start — {sources:?}");
+                        let _ = app2.emit(
+                            "meeting-gone",
+                            serde_json::json!({ "sources": sources }),
+                        );
+                    }
+                    // Every newly-appearing source is a fresh chance to
+                    // transcribe — including an app switch with no mic-free gap
+                    // and a second simultaneous meeting.
+                    if let Some((name, source)) = appeared.first() {
+                        log::info!("mic_monitor: meeting detected — {name} ({source})");
+                        show_prompt_window(&app2);
+                        let _ = app2.emit(
+                            "meeting-detected",
+                            serde_json::json!({
+                                "app": name,
+                                "bundleId": source,
+                                "sensitive": crate::ingest::is_sensitive(),
+                            }),
+                        );
+                    }
                 }
             });
         }
