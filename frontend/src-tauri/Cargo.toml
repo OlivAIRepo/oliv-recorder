@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.26"
+version = "0.3.27"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -108,7 +108,12 @@ sonora = { git = "https://github.com/dignifiedquire/sonora", rev = "dec6a074725e
 # NOTE: whisper-rs is declared in platform-specific sections below (macOS/Windows/Linux)
 # to ensure correct GPU features are enabled per platform
 futures-util = "0.3"
-silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", package = "silero" }
+# Pinned past upstream #56 ("Fix panic in get_current_speech", 8f7cc8c): the
+# speech-start pre-pad could index into already-deleted buffer when speech
+# resumed within pre_speech_pad of the previous segment — panicking the whole
+# audio pipeline task mid-recording ("Duration Xms is outside of session audio
+# range") and silently killing capture + transcription for the rest of the call.
+silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "8f7cc8c98b61ea196201b6f681b73a64a1c8c442", package = "silero" }
 
 # Parakeet (ONNX-based fast transcription) dependencies
 ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
