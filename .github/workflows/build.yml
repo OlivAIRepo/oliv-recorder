@@ -585,7 +585,27 @@ jobs:
         uses: actions/cache@v4
         with:
           path: frontend/src-tauri/binaries/ffmpeg-*
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}    
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
+
+      # App-local VC++ runtime: ship the MSVC CRT DLLs (msvcp140*.dll,
+      # vcruntime140*.dll, …) next to the exe so the app starts on machines
+      # without the VC++ Redistributable installed (otherwise a clean Windows
+      # fails at launch with "MSVCP140_1.dll was not found"). Bundled via the
+      # resources map in tauri.windows.conf.json, which installs them into the
+      # app directory — Windows' DLL search finds them there first.
+      - name: Stage VC++ runtime DLLs (app-local CRT)
+        if: contains(inputs.platform, 'windows')
+        shell: powershell
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "Visual Studio with VC tools not found" }
+          $crt = Get-ChildItem -Directory "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" | Select-Object -Last 1
+          if (-not $crt) { throw "MSVC CRT redist folder not found under $vs" }
+          New-Item -ItemType Directory -Force -Path frontend/src-tauri/binaries/vcredist | Out-Null
+          Copy-Item "$($crt.FullName)\*.dll" frontend/src-tauri/binaries/vcredist/
+          Write-Host "Staged CRT DLLs from $($crt.FullName):"
+          Get-ChildItem frontend/src-tauri/binaries/vcredist | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Build with Tauri
         id: tauri-build
