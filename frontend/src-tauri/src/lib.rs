@@ -120,6 +120,82 @@ fn reset_app_data<R: Runtime>(app: AppHandle<R>) {
     app.restart();
 }
 
+/// Uninstall the app from Settings → Uninstall. Removes the login item, the
+/// login token (keychain), app data, and the app itself, then exits.
+/// Recordings (~/Movies/oliv) are KEPT — they're the user's data.
+#[tauri::command]
+fn uninstall_app<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    log::info!("uninstall_app: starting self-uninstall");
+
+    // 1. Remove the login item so a ghost entry doesn't survive the app.
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        if let Err(e) = app.autolaunch().disable() {
+            log::warn!("uninstall_app: autostart disable failed: {e}");
+        }
+    }
+    // 2. Log out (clears the keychain token + in-memory cache).
+    let _ = auth::oliv_logout(app.clone());
+
+    // 3. Platform-specific removal of data + binaries, detached so it can
+    //    delete the running app after we exit.
+    #[cfg(target_os = "macos")]
+    {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        // …/Oliv AI.app/Contents/MacOS/meetily → the bundle root.
+        let bundle = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.ancestors().nth(3).map(|b| b.to_path_buf()))
+            .filter(|b| b.extension().is_some_and(|e| e == "app"))
+            .map(|b| b.to_string_lossy().to_string());
+        let Some(bundle) = bundle else {
+            return Err("could not locate the app bundle to remove".into());
+        };
+        let script = format!(
+            "sleep 2; rm -rf {data} {bundle}",
+            data = shell_quote(&data_dir),
+            bundle = shell_quote(&bundle),
+        );
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .spawn()
+            .map_err(|e| format!("failed to start uninstall helper: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Tauri's NSIS bundle ships uninstall.exe next to the app exe; it
+        // removes files, registry entries, and shortcuts with the proper UI.
+        let uninstaller = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("uninstall.exe")))
+            .filter(|p| p.exists())
+            .ok_or_else(|| "uninstall.exe not found next to the app".to_string())?;
+        std::process::Command::new(uninstaller)
+            .spawn()
+            .map_err(|e| format!("failed to launch uninstaller: {e}"))?;
+    }
+
+    // 4. Real exit (bypasses the menubar keep-alive).
+    ALLOW_EXIT.store(true, Ordering::SeqCst);
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        app2.exit(0);
+    });
+    Ok(())
+}
+
+/// Minimal POSIX shell single-quoting for paths interpolated into `sh -c`.
+#[cfg(target_os = "macos")]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 #[tauri::command]
 async fn start_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -556,6 +632,10 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -699,6 +779,19 @@ pub fn run() {
             // Prune local meeting audio older than the retention window.
             crate::audio::cleanup::init(&_app.handle());
 
+            // Launch-on-login is mandatory: re-enable it on every start (there
+            // is deliberately no settings toggle; the only way out is
+            // uninstalling via Settings → Uninstall). Skipped in dev builds so
+            // a debug binary never registers itself as a login item.
+            #[cfg(not(debug_assertions))]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                match _app.autolaunch().enable() {
+                    Ok(()) => log::info!("autostart: enabled (launch on login)"),
+                    Err(e) => log::warn!("autostart: enable failed: {e}"),
+                }
+            }
+
             // Oliv login deep link: olivrecorder://auth-callback?ic_token=...
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
@@ -732,6 +825,7 @@ pub fn run() {
             ingest::oliv_set_source_app,
             show_main_window,
             reset_app_data,
+            uninstall_app,
             start_recording,
             stop_recording,
             is_recording,
