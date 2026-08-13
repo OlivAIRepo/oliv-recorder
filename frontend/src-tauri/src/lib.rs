@@ -39,6 +39,7 @@ pub mod analytics;
 pub mod api;
 pub mod audio;
 pub mod auth;
+pub mod autostart;
 pub mod ingest;
 pub mod config;
 pub mod console_utils;
@@ -128,12 +129,7 @@ fn uninstall_app<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     log::info!("uninstall_app: starting self-uninstall");
 
     // 1. Remove the login item so a ghost entry doesn't survive the app.
-    {
-        use tauri_plugin_autostart::ManagerExt;
-        if let Err(e) = app.autolaunch().disable() {
-            log::warn!("uninstall_app: autostart disable failed: {e}");
-        }
-    }
+    autostart::unregister(&app);
     // 2. Log out (clears the keychain token + in-memory cache).
     let _ = auth::oliv_logout(app.clone());
 
@@ -779,18 +775,12 @@ pub fn run() {
             // Prune local meeting audio older than the retention window.
             crate::audio::cleanup::init(&_app.handle());
 
-            // Launch-on-login is mandatory: re-enable it on every start (there
+            // Launch-on-login is mandatory: re-assert it on every start (there
             // is deliberately no settings toggle; the only way out is
             // uninstalling via Settings → Uninstall). Skipped in dev builds so
             // a debug binary never registers itself as a login item.
             #[cfg(not(debug_assertions))]
-            {
-                use tauri_plugin_autostart::ManagerExt;
-                match _app.autolaunch().enable() {
-                    Ok(()) => log::info!("autostart: enabled (launch on login)"),
-                    Err(e) => log::warn!("autostart: enable failed: {e}"),
-                }
-            }
+            crate::autostart::enforce(&_app.handle());
 
             // Oliv login deep link: olivrecorder://auth-callback?ic_token=...
             {
@@ -826,6 +816,8 @@ pub fn run() {
             show_main_window,
             reset_app_data,
             uninstall_app,
+            autostart::autostart_status,
+            autostart::open_login_items_settings,
             start_recording,
             stop_recording,
             is_recording,

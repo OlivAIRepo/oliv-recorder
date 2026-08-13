@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.32"
+version = "0.3.33"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -190,6 +190,9 @@ core-graphics = "0.23"
 core-foundation = "0.9"
 core-foundation-sys = "0.8"
 cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["av"] }
+# SMAppService (login items, macOS 13+). The legacy LaunchAgent path can't
+# survive a user disable in System Settings; this is Apple's supported API.
+objc2-service-management = { version = "0.3", features = ["SMAppService", "objc2", "objc2-foundation"] }
 dasp = "0.11.0"
 futures-channel = "0.3.31"
 

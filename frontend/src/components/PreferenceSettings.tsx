@@ -6,6 +6,7 @@ import { FolderOpen } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
 import Analytics from "@/lib/analytics"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
+import { UninstallSection } from "./UninstallSection"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
 
 export function PreferenceSettings() {
@@ -18,9 +19,6 @@ export function PreferenceSettings() {
   } = useConfig();
 
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
-  const [confirmUninstall, setConfirmUninstall] = useState(false);
-  const [uninstalling, setUninstalling] = useState(false);
-  const [uninstallError, setUninstallError] = useState<string | null>(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [previousNotificationsEnabled, setPreviousNotificationsEnabled] = useState<boolean | null>(null);
   const hasTrackedViewRef = useRef(false);
@@ -229,55 +227,7 @@ export function PreferenceSettings() {
       </div>
 
       {/* Uninstall Section */}
-      <div className="bg-white rounded-lg border border-red-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">Uninstall Oliv AI</h3>
-        <p className="text-sm text-gray-600 mb-4">
-          Removes the app, its data, and your login from this computer. Your meeting
-          recordings folder is kept.
-        </p>
-        {uninstallError && (
-          <p className="text-sm text-red-600 mb-3">{uninstallError}</p>
-        )}
-        {!confirmUninstall ? (
-          <button
-            onClick={() => setConfirmUninstall(true)}
-            className="px-4 py-2 text-sm font-medium text-red-600 border border-red-300 rounded-md hover:bg-red-50 transition-colors"
-          >
-            Uninstall…
-          </button>
-        ) : (
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-medium text-red-700">
-              Are you sure? The app will close and remove itself.
-            </span>
-            <button
-              onClick={async () => {
-                setUninstalling(true);
-                setUninstallError(null);
-                try {
-                  await Analytics.track('app_uninstalled', {});
-                  await invoke('uninstall_app');
-                } catch (error) {
-                  setUninstalling(false);
-                  setConfirmUninstall(false);
-                  setUninstallError(String(error));
-                }
-              }}
-              disabled={uninstalling}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-60 transition-colors"
-            >
-              {uninstalling ? 'Uninstalling…' : 'Yes, uninstall'}
-            </button>
-            <button
-              onClick={() => setConfirmUninstall(false)}
-              disabled={uninstalling}
-              className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-      </div>
+      <UninstallSection />
     </div>
   )
 }

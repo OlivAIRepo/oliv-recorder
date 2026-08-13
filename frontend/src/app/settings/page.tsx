@@ -11,6 +11,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { useUpdateCheckContext } from '@/components/UpdateCheckProvider';
 import { DeviceSelection } from '@/components/DeviceSelection';
+import { UninstallSection } from '@/components/UninstallSection';
 
 // One permission's real state + a Grant button when it's missing.
 function PermissionRow({
@@ -54,10 +55,15 @@ export default function SettingsPage() {
   const { hasMicrophone, isChecking, checkPermissions } = usePermissionCheck();
   const { checkNow, isChecking: isCheckingUpdate } = useUpdateCheckContext();
   const [appVersion, setAppVersion] = useState<string>('');
+  // Launch-on-login is mandatory but macOS lets the user disable it in System
+  // Settings and the app cannot silently override that — surface a re-enable
+  // prompt when it's off.
+  const [autostartOn, setAutostartOn] = useState<boolean | null>(null);
   const [upToDate, setUpToDate] = useState(false);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {});
+    invoke<boolean>('autostart_status').then(setAutostartOn).catch(() => {});
   }, []);
 
   const handleCheckUpdates = useCallback(async () => {
@@ -168,6 +174,23 @@ export default function SettingsPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto p-8 pt-6">
+          {autostartOn === false && (
+            <div className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <div className="flex items-center gap-2 text-sm text-amber-800">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>
+                  Start at login is turned off in System Settings. Oliv needs it to
+                  capture your meetings automatically.
+                </span>
+              </div>
+              <button
+                onClick={() => invoke('open_login_items_settings').catch(() => {})}
+                className="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 transition-colors"
+              >
+                Re-enable
+              </button>
+            </div>
+          )}
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900">Account</h2>
             {account ? (
@@ -289,6 +312,9 @@ export default function SettingsPage() {
               Reset app data &amp; log out
             </button>
           </div>
+
+          {/* Uninstall */}
+          <UninstallSection />
         </div>
       </div>
     </div>
