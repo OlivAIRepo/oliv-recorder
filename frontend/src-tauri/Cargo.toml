@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.3.31"
+version = "0.3.32"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -167,6 +167,8 @@ tauri-plugin-notification = "2.3.1"
 tauri-plugin-updater = "2.3.0"
 tauri-plugin-process = "2.3.0"
 tauri-plugin-deep-link = "2"
+# Launch on login. Enforced (re-enabled) at every app start — no user toggle.
+tauri-plugin-autostart = "2"
 # Single-instance is required on Windows/Linux so the olivrecorder:// login
 # callback is forwarded into the already-running app (deep-link feature) instead
 # of launching a second instance.

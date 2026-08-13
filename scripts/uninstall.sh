@@ -38,6 +38,10 @@ rm -rf "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUND
 rm -rf "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
 rm -f  "$HOME/Library/Preferences/$BUNDLE_ID.plist"
 
+# 3.5. Launch-on-login agent (registered automatically by the app since 0.3.32).
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BUNDLE_ID.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/$BUNDLE_ID.plist" "$HOME/Library/LaunchAgents/Oliv AI.plist"
+
 # 4. Logged-in token (macOS keychain).
 security delete-generic-password -s "$BUNDLE_ID" >/dev/null 2>&1 || true
 
