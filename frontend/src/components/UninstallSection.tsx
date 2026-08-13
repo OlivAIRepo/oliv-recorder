@@ -19,8 +19,7 @@ export function UninstallSection() {
     <div className="mt-6 bg-white rounded-xl border border-red-200 p-6">
       <h2 className="text-lg font-semibold text-gray-900">Uninstall Oliv AI</h2>
       <p className="mt-1 text-sm text-gray-500">
-        Removes the app, its data, and your login from this computer. Your meeting
-        recordings folder is kept.
+        Removes the app, its data, and your login from this computer.
       </p>
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       {!confirming ? (
@@ -28,7 +27,7 @@ export function UninstallSection() {
           onClick={() => setConfirming(true)}
           className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-300 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
         >
-          Uninstall…
+          Uninstall
         </button>
       ) : (
         <div className="mt-4 flex flex-wrap items-center gap-3">
