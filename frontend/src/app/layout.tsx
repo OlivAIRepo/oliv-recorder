@@ -21,6 +21,7 @@ import { OnboardingFlow } from '@/components/onboarding'
 import LoginGate from '@/components/LoginGate'
 import MeetingDetectedPrompt from '@/components/MeetingDetectedPrompt'
 import ResetHandler from '@/components/ResetHandler'
+import SessionExpiredToast from '@/components/SessionExpiredToast'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
@@ -280,6 +281,7 @@ export default function RootLayout({
         </AnalyticsProvider>
 
         <ResetHandler />
+        <SessionExpiredToast />
         <Toaster position="bottom-center" richColors closeButton />
       </body>
     </html>

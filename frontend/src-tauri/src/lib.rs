@@ -764,6 +764,8 @@ pub fn run() {
 
             // Resolve where the Oliv login token is stored (app-data file).
             crate::auth::init_store(&_app.handle());
+            // Let background tasks (ingest, whitelist heartbeat) emit auth events.
+            crate::auth::init_notifier(_app.handle().clone());
 
             // Stream the live transcript (+ audio later) to the recorder ingest.
             crate::ingest::init(&_app.handle());

@@ -89,6 +89,16 @@ async fn refresh_whitelist() {
         .await;
     let resp = match resp {
         Ok(r) if r.status().is_success() => r,
+        // The 5-min heartbeat is the earliest place a server-side token eviction
+        // shows up (it runs even between meetings). Surface it as a reconnect
+        // prompt instead of silently keeping the stale config.
+        Ok(r)
+            if r.status() == reqwest::StatusCode::UNAUTHORIZED
+                || r.status() == reqwest::StatusCode::FORBIDDEN =>
+        {
+            crate::auth::notify_auth_lost();
+            return;
+        }
         _ => return,
     };
     #[derive(serde::Deserialize)]
