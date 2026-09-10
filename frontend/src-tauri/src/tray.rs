@@ -51,6 +51,9 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
         "resume_recording" => resume_recording_handler(app),
         "stop_recording" => stop_recording_handler(app),
         "open_window" => focus_main_window(app),
+        // Surface the window; SessionExpiredToast checks the auth flag on mount
+        // and shows the sticky "Reconnect" prompt with the login action.
+        "reconnect" => focus_main_window(app),
         "settings" => {
             focus_main_window(app);
             if let Some(window) = app.get_webview_window("main") {
@@ -265,6 +268,23 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
+/// Reflect the current auth state in the tray: a warning tooltip + a "Reconnect"
+/// menu item when signed out, back to normal on reconnect. Called from the
+/// auth-lost / re-login paths (crate::auth). The menu item itself is rendered by
+/// build_menu (which reads the same flag); this just forces an immediate refresh
+/// and updates the tooltip, which set_menu does not touch.
+pub fn refresh_auth_state<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let tooltip = if crate::auth::recorder_auth_lost() {
+            "Oliv AI — signed out; reconnect to sync recordings"
+        } else {
+            "Oliv AI"
+        };
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+    update_tray_menu(app);
+}
+
 pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     log::info!("Tray: Setting intermediate state: {:?}", state);
     // During recording state transitions, we assume recording is allowed (we're already recording)
@@ -380,6 +400,17 @@ fn build_menu<R: Runtime>(
     prep_percent: Option<u8>, // Download completion while the model is still being fetched
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     let mut builder = MenuBuilder::new(app);
+
+    // Signed-out warning at the very top. build_menu is consulted on every tray
+    // re-render (recording-state changes, etc.), so gating on the shared auth flag
+    // keeps this item present until reconnect instead of being overwritten. It's
+    // the ambient signal for a background/menubar-only user who never opens the
+    // window; clicking it surfaces the window (where the reconnect toast lives).
+    if crate::auth::recorder_auth_lost() {
+        builder = builder
+            .item(&MenuItemBuilder::with_id("reconnect", "⚠️ Reconnect to Oliv").build(app)?)
+            .item(&PredefinedMenuItem::separator(app)?);
+    }
 
     // If recording is not allowed (during onboarding, no transcription model), show disabled message
     if !can_record {

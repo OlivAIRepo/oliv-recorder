@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_notification::NotificationExt;
 
 const ACCOUNT_FILE: &str = "oliv_account.json";
 
@@ -81,7 +82,18 @@ pub fn notify_auth_lost() {
     }
     log::warn!("auth: ic_token rejected by server (401/403) — prompting reconnect");
     if let Some(app) = NOTIFY_APP.get() {
+        // In-app sticky toast (if a window is open).
         let _ = app.emit("oliv-auth-lost", ());
+        // Native OS notification — the only signal a background/menubar-only user
+        // reliably sees. Debounced above, so this fires once per lost session.
+        let _ = app
+            .notification()
+            .builder()
+            .title("Oliv — signed out")
+            .body("Your meetings are recording locally but not syncing. Reconnect to Oliv.")
+            .show();
+        // Persistent tray warning + "Reconnect" menu item.
+        crate::tray::refresh_auth_state(app);
     }
 }
 
@@ -154,8 +166,11 @@ fn store_account(acct: &StoredAccount) {
     // Keep the in-memory cache in sync.
     cache_set(Some(acct.clone()));
     // A fresh token means any prior "reconnect" prompt is resolved; re-arm the
-    // notifier so a future rejection prompts again.
+    // notifier so a future rejection prompts again, and clear the tray warning.
     AUTH_LOST.store(false, Ordering::SeqCst);
+    if let Some(app) = NOTIFY_APP.get() {
+        crate::tray::refresh_auth_state(app);
+    }
 }
 
 fn read_account() -> Option<StoredAccount> {

@@ -22,6 +22,10 @@ function showReconnectToast() {
     description:
       'Your meetings are recording locally but not syncing to Oliv. Reconnect to resume uploads.',
     duration: Infinity,
+    // Sticky: no auto-timeout, no close button, no swipe-to-dismiss. It clears
+    // only on reconnect (oliv-auth-changed) so a signed-out user can't miss it.
+    dismissible: false,
+    closeButton: false,
     action: {
       label: 'Reconnect',
       onClick: () => {
