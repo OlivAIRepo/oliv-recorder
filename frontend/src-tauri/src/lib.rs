@@ -812,6 +812,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::get_oliv_account,
             auth::oliv_logout,
+            auth::recorder_auth_lost,
             ingest::oliv_set_sensitive,
             ingest::oliv_get_sensitive,
             ingest::oliv_set_source_app,

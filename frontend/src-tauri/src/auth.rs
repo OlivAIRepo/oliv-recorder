@@ -85,6 +85,15 @@ pub fn notify_auth_lost() {
     }
 }
 
+/// Whether we're currently in the "reconnect needed" state. The frontend checks
+/// this on mount because the first rejection can fire ~1s after launch — before
+/// the webview registers its `oliv-auth-lost` listener — so the live event alone
+/// misses the common "token already dead at launch" case.
+#[tauri::command]
+pub fn recorder_auth_lost() -> bool {
+    AUTH_LOST.load(Ordering::SeqCst)
+}
+
 // In-memory cache so the file is read at most once per launch; writes/logout
 // keep it in sync.
 struct Cache {

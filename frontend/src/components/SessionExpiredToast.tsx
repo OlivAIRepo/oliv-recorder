@@ -16,24 +16,36 @@ import { OLIV_LOGIN_URL } from '@/lib/olivAuth';
 // deep-link handler emits `oliv-auth-changed`, which dismisses this.
 const TOAST_ID = 'oliv-auth-lost';
 
+function showReconnectToast() {
+  toast.error('Oliv session expired', {
+    id: TOAST_ID, // stable id: repeated events update one toast, never stack
+    description:
+      'Your meetings are recording locally but not syncing to Oliv. Reconnect to resume uploads.',
+    duration: Infinity,
+    action: {
+      label: 'Reconnect',
+      onClick: () => {
+        invoke('open_external_url', { url: OLIV_LOGIN_URL }).catch((e) =>
+          console.error('Failed to open Oliv login:', e),
+        );
+      },
+    },
+  });
+}
+
 export default function SessionExpiredToast() {
   useEffect(() => {
-    const unlistenLost = listen('oliv-auth-lost', () => {
-      toast.error('Oliv session expired', {
-        id: TOAST_ID, // stable id: repeated events update one toast, never stack
-        description:
-          'Your meetings are recording locally but not syncing to Oliv. Reconnect to resume uploads.',
-        duration: Infinity,
-        action: {
-          label: 'Reconnect',
-          onClick: () => {
-            invoke('open_external_url', { url: OLIV_LOGIN_URL }).catch((e) =>
-              console.error('Failed to open Oliv login:', e),
-            );
-          },
-        },
-      });
-    });
+    // The first rejection can fire ~1s after launch, before this listener is
+    // registered (Tauri doesn't buffer events for late listeners) — the common
+    // "token already dead at launch" case. So also check the backend flag on
+    // mount, not just the live event.
+    invoke<boolean>('recorder_auth_lost')
+      .then((lost) => {
+        if (lost) showReconnectToast();
+      })
+      .catch(() => {});
+
+    const unlistenLost = listen('oliv-auth-lost', () => showReconnectToast());
 
     // Successful (re-)login emits this; clear the prompt.
     const unlistenChanged = listen('oliv-auth-changed', () => {
