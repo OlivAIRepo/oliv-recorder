@@ -65,7 +65,13 @@
     done = true;
     stopTimer();
     if (mode === "detect") {
-      emit("start-recording-from-prompt", { app: currentApp, sensitive: sensitiveEl.checked });
+      emit("start-recording-from-prompt", {
+        app: currentApp,
+        // The stable id (macOS bundle id, Windows exe / package family name).
+        // The display name is localized, so the backend must key on this.
+        source: currentSource,
+        sensitive: sensitiveEl.checked,
+      });
     } else {
       // "End" → stop transcription in the background (non-focusing stop).
       invoke("oliv_stop_recording").catch(function () {});

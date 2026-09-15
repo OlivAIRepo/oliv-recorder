@@ -86,10 +86,15 @@ fn sensitive_level() -> &'static str {
     }
 }
 
-// Source app that triggered the recording (e.g. "zoom.us" from the auto-detect
-// prompt). Tags the ingest session; cleared at session end so a later manual
-// start isn't mislabelled. None for manual starts.
+// Source app that triggered the recording, from the auto-detect prompt. Two
+// values, because they serve different readers: the DISPLAY NAME ("Zoom",
+// "WhatsApp") is localized and only for humans, while the STABLE ID (macOS
+// bundle id, Windows exe / package family name) is what the backend routes on —
+// a WhatsApp call is logged as a call, a meeting app as a meeting. Cleared
+// at session end so a later manual start isn't mislabelled; both None for a
+// manual start.
 static SOURCE_APP: Mutex<Option<String>> = Mutex::new(None);
+static SOURCE_APP_ID: Mutex<Option<String>> = Mutex::new(None);
 
 /// Display name of the app the current recording was started for (None for
 /// manual starts). Used by the mic monitor to scope end-of-meeting detection
@@ -98,15 +103,22 @@ pub fn source_app() -> Option<String> {
     SOURCE_APP.lock().unwrap().clone()
 }
 
-/// Set by the meeting-detected prompt before an auto-started recording.
-#[tauri::command]
-pub fn oliv_set_source_app(app: Option<String>) {
-    let v = app.and_then(|s| {
+fn trimmed(v: Option<String>) -> Option<String> {
+    v.and_then(|s| {
         let t = s.trim().to_string();
         (!t.is_empty()).then_some(t)
-    });
-    log::info!("ingest: source app = {v:?}");
-    *SOURCE_APP.lock().unwrap() = v;
+    })
+}
+
+/// Set by the meeting-detected prompt before an auto-started recording.
+/// `app_id` is the prompt's `source` — the id the detector matched on.
+#[tauri::command]
+pub fn oliv_set_source_app(app: Option<String>, app_id: Option<String>) {
+    let name = trimmed(app);
+    let id = trimmed(app_id);
+    log::info!("ingest: source app = {name:?} ({id:?})");
+    *SOURCE_APP.lock().unwrap() = name;
+    *SOURCE_APP_ID.lock().unwrap() = id;
 }
 
 struct SessionState {
@@ -235,6 +247,7 @@ async fn start_session(meeting_name: Option<String>) {
         });
     }
     let source_app = SOURCE_APP.lock().unwrap().clone();
+    let source_app_id = SOURCE_APP_ID.lock().unwrap().clone();
     // Sensitive meeting (mic-only): sent so the API can record it in "Provider
     // metadata". It also explains why the system channel is absent from S3.
     let sensitive = SENSITIVE.load(Ordering::SeqCst);
@@ -243,6 +256,7 @@ async fn start_session(meeting_name: Option<String>) {
         "session_id": session_id,
         "title": meeting_name,
         "source_app": source_app,
+        "source_app_id": source_app_id,
         "sensitive": sensitive,
         "app_version": env!("CARGO_PKG_VERSION"),
         "started_at": now_iso(),
@@ -360,8 +374,9 @@ async fn end_session() {
             None => return,
         }
     };
-    // Reset source tag so a subsequent manual recording isn't mislabelled.
+    // Reset source tags so a subsequent manual recording isn't mislabelled.
     *SOURCE_APP.lock().unwrap() = None;
+    *SOURCE_APP_ID.lock().unwrap() = None;
 
     // Re-send the complete transcript before ending so the server row is
     // reconciled to everything we captured. This subsumes anything still buffered

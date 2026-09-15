@@ -216,6 +216,9 @@ fn detect_all() -> Vec<(String, String)> {
             "slack.exe" => Some("Slack"),
             "webex.exe" | "webexmta.exe" | "atmgr.exe" | "ptoneclk.exe" => Some("Webex"),
             "gotomeeting.exe" | "goto.exe" => Some("GoTo Meeting"),
+            // WhatsApp Desktop calls. Usually the Store build (matched as a
+            // package below); this covers the standalone installer.
+            "whatsapp.exe" => Some("WhatsApp"),
             _ => None,
         }
     }
@@ -224,6 +227,11 @@ fn detect_all() -> Vec<(String, String)> {
             Some("Microsoft Teams")
         } else if pfn.contains("zoom") {
             Some("Zoom")
+        } else if pfn.contains("whatsapp") {
+            // e.g. "5319275A.WhatsAppDesktop_cv1g1gvanyjgm" — matched on the app
+            // name rather than the whole family name, which carries a
+            // publisher-specific hash suffix.
+            Some("WhatsApp")
         } else {
             None
         }

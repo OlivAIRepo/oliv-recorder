@@ -8,6 +8,8 @@ import { useRecordingState } from '@/contexts/RecordingStateContext';
 
 interface StartPayload {
   app: string;
+  /** Stable id of the app: macOS bundle id, Windows exe / package family name. */
+  source?: string;
   sensitive: boolean;
 }
 
@@ -34,13 +36,15 @@ export default function MeetingDetectedPrompt() {
   useEffect(() => {
     const unlisten = listen<StartPayload>('start-recording-from-prompt', async (event) => {
       if (isRecordingRef.current) return;
-      const { app, sensitive } = event.payload;
+      const { app, source, sensitive } = event.payload;
       // Rust holds the authoritative flag and rebroadcasts `sensitive-changed`,
       // which the Home screen's checkbox follows.
       await invoke('oliv_set_sensitive', { sensitive }).catch(() => {});
       // Tag the source app for the ingest session, but don't use it as the
       // meeting name — names are always auto-generated (Meeting dd_mm_yy_…).
-      await invoke('oliv_set_source_app', { app }).catch(() => {});
+      // `appId` is the stable id the backend routes on (a WhatsApp call is
+      // logged as a call, a meeting app as a meeting).
+      await invoke('oliv_set_source_app', { app, appId: source ?? null }).catch(() => {});
       if (pathnameRef.current === '/') {
         window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
       } else {
