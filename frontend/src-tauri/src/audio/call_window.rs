@@ -63,7 +63,7 @@ pub fn whatsapp_pid() -> Option<i32> {
                 .map(|b| b.to_string().to_lowercase().contains("whatsapp"))
                 .unwrap_or(false)
         })
-        .and_then(|a| a.pid().ok())
+        .map(|a| a.pid())
 }
 
 /// Whether this app may read other apps' UI. False until the user ticks us in
@@ -76,7 +76,7 @@ pub fn is_trusted() -> bool {
 pub fn request_trust() -> bool {
     use core_foundation::base::TCFType;
     use core_foundation::dictionary::CFDictionary;
-    use core_foundation::number::CFBoolean;
+    use core_foundation::boolean::CFBoolean;
     if is_trusted() {
         return true;
     }
