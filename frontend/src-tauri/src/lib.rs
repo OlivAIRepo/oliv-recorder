@@ -816,6 +816,8 @@ pub fn run() {
             ingest::oliv_set_sensitive,
             ingest::oliv_get_sensitive,
             ingest::oliv_set_source_app,
+            audio::call_window::oliv_request_accessibility,
+            audio::call_window::oliv_accessibility_granted,
             show_main_window,
             reset_app_data,
             uninstall_app,

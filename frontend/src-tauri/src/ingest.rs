@@ -374,9 +374,32 @@ async fn end_session() {
             None => return,
         }
     };
+    // What WhatsApp showed about this call, raw and unparsed. The window title
+    // was captured while the call was still up (it is destroyed when the call
+    // ends); the chat entry outlives the call, so it is read now. Both are
+    // localized and carry invisible formatting, so the server does the reading —
+    // it can be fixed there without shipping a new app.
+    #[cfg(target_os = "macos")]
+    let (call_window_title, call_chat_entry) = {
+        let title = crate::audio::call_window::captured_title();
+        let entry = if title.is_some() {
+            crate::audio::call_window::whatsapp_pid()
+                .and_then(crate::audio::call_window::call_chat_entry)
+        } else {
+            None
+        };
+        (title, entry)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (call_window_title, call_chat_entry): (Option<String>, Option<String>) = (None, None);
+
     // Reset source tags so a subsequent manual recording isn't mislabelled.
     *SOURCE_APP.lock().unwrap() = None;
     *SOURCE_APP_ID.lock().unwrap() = None;
+    // …and the captured call window, so one call's counterparty can never be
+    // reported for the next recording.
+    #[cfg(target_os = "macos")]
+    crate::audio::call_window::reset();
 
     // Re-send the complete transcript before ending so the server row is
     // reconciled to everything we captured. This subsumes anything still buffered
@@ -397,11 +420,14 @@ async fn end_session() {
     // "none") — the toggle can flip mid-call, so this, not the start-time
     // boolean, is the authoritative value.
     let sensitive = sensitive_level();
+
     let body = json!({
         "session_id": session_id,
         "ended_at": now_iso(),
         "segment_count": count,
         "sensitive": sensitive,
+        "call_window_title": call_window_title,
+        "call_chat_entry": call_chat_entry,
     });
     if let Err(e) = post_json(&token, "session/end", body).await {
         log::warn!("ingest: {e}");

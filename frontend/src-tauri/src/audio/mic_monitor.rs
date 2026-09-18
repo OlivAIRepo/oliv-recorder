@@ -391,6 +391,18 @@ fn run<R: Runtime>(app: AppHandle<R>) {
         let mut last: Vec<(String, String)> = Vec::new();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+
+            // The WhatsApp call window is destroyed the moment the call ends, so
+            // its title — the only place the counterparty appears — has to be
+            // read while the call is still up. One cheap AX call, and it stops
+            // once a title is held.
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(pid) = crate::audio::call_window::whatsapp_pid() {
+                    crate::audio::call_window::observe(pid);
+                }
+            }
+
             let now = detect_all();
             let appeared: Vec<(String, String)> = now
                 .iter()
