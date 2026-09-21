@@ -38,6 +38,27 @@ use core_foundation::base::{CFGetTypeID, CFRelease, CFRetain, CFTypeRef, TCFType
 use core_foundation::string::{CFString, CFStringGetTypeID, CFStringRef};
 
 type AXUIElementRef = *const c_void;
+
+/// What the LIVE call window tells us. This is the authoritative source.
+///
+/// The main window shows whatever the rep last clicked — the Calls tab, another
+/// chat, Settings — so anything read there is luck. The call window exists only
+/// for THIS call, is owned by it, and dies with it, so nothing else can pollute
+/// it. Everything here is read by accessibility IDENTIFIER rather than by
+/// matching English, so it survives localization.
+#[derive(Clone, Debug, Default)]
+pub struct CallWindowState {
+    /// Window title, e.g. "<contact name> - WhatsApp voice call".
+    pub title: String,
+    /// The other party, from their own element rather than parsed out of the title.
+    pub counterparty: Option<String>,
+    /// The other side joined: the call was ANSWERED. Measured live, unlike the
+    /// chat text, which reported "unanswered" for a call that plainly connected.
+    pub connected: bool,
+    /// Video rather than voice.
+    pub video: bool,
+}
+
 type AXError = i32;
 const AX_SUCCESS: AXError = 0;
 
@@ -163,6 +184,70 @@ fn release_elements(elements: &[AXUIElementRef]) {
 fn is_call_window(title: &str) -> bool {
     let t = title.to_lowercase();
     t.contains("whatsapp") && t.contains(" - ")
+}
+
+/// Read the live call window. None when no call is on screen.
+///
+/// Note what is NOT here: the call duration. The window shows a running timer
+/// on screen (00:11), but WhatsApp does not publish it to the accessibility
+/// tree — all 29 elements were dumped during a live call and none carries it.
+/// Duration therefore has to come from the recording.
+pub fn call_window_state(pid: i32) -> Option<CallWindowState> {
+    if !is_trusted() {
+        return None;
+    }
+    let app = unsafe { AXUIElementCreateApplication(pid) };
+    if app.is_null() {
+        return None;
+    }
+    let windows = attr_elements(app, "AXWindows");
+    let mut state: Option<CallWindowState> = None;
+
+    for w in &windows {
+        let title = attr_string(*w, "AXTitle").unwrap_or_default();
+        let is_call_win = attr_string(*w, "AXIdentifier").as_deref() == Some("Calling_Window")
+            || is_call_window(&title);
+        if !is_call_win {
+            continue;
+        }
+        let mut found = CallWindowState {
+            title: title.clone(),
+            counterparty: None,
+            connected: false,
+            video: title.to_lowercase().contains("video"),
+        };
+        let mut queue: Vec<AXUIElementRef> = attr_elements(*w, "AXChildren");
+        let mut seen = 0usize;
+        while let Some(el) = queue.pop() {
+            seen += 1;
+            if seen > 200 {          // ~30 elements in practice; never stall the poll
+                unsafe { CFRelease(el as CFTypeRef) };
+                break;
+            }
+            // This cell appears once the other side is IN the call.
+            if attr_string(el, "AXIdentifier").as_deref() == Some("CallUI_ParticipantAudioCell") {
+                found.connected = true;
+            }
+            if found.counterparty.is_none() {
+                if let Some(d) = attr_string(el, "AXDescription") {
+                    // The peer's name is a bare AXStaticText description and is
+                    // also how the title starts; every other description here is
+                    // a control ("mute off", "leave call") or a notice.
+                    if !d.is_empty() && title.starts_with(&d) {
+                        found.counterparty = Some(d);
+                    }
+                }
+            }
+            queue.extend(attr_elements(el, "AXChildren"));
+            unsafe { CFRelease(el as CFTypeRef) };
+        }
+        release_elements(&queue);
+        state = Some(found);
+        break;
+    }
+    release_elements(&windows);
+    unsafe { CFRelease(app as CFTypeRef) };
+    state
 }
 
 /// WhatsApp's call-window title, if a call is on screen right now.
@@ -292,6 +377,11 @@ pub fn new_chat_lines(pid: i32) -> Option<String> {
 
 static CAPTURED_TITLE: Mutex<Option<String>> = Mutex::new(None);
 
+/// What the live call window showed during this recording. Sticky: once the
+/// call connects we keep `connected`, because the window is gone by the time we
+/// report and cannot be asked again.
+static CAPTURED_STATE: Mutex<Option<CallWindowState>> = Mutex::new(None);
+
 /// Call lines already in the chat when this recording began.
 static BASELINE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
@@ -322,10 +412,42 @@ pub fn observe(pid: i32) {
         }
         return;
     }
-    if let Some(title) = call_window_title(pid) {
-        log::info!("call_window: captured '{title}'");
-        *CAPTURED_TITLE.lock().unwrap() = Some(title);
+    if let Some(state) = call_window_state(pid) {
+        log::info!(
+            "call_window: captured '{}' (peer={:?} connected={} video={})",
+            state.title, state.counterparty, state.connected, state.video
+        );
+        *CAPTURED_TITLE.lock().unwrap() = Some(state.title.clone());
+        *CAPTURED_STATE.lock().unwrap() = Some(state);
     }
+}
+
+/// Keep watching a call we have already seen, so a later connect is noticed.
+///
+/// The window appears while it is still RINGING, so the first read says
+/// `connected: false`. Answering is what changes that, and the window is
+/// destroyed at hang-up, so it has to be caught while the call is live.
+pub fn observe_connected(pid: i32) {
+    let already = CAPTURED_STATE.lock().unwrap().as_ref().map(|s| s.connected);
+    if already != Some(false) {
+        return;   // nothing captured yet, or already known connected
+    }
+    if let Some(state) = call_window_state(pid) {
+        if state.connected {
+            log::info!("call_window: call connected");
+            if let Some(held) = CAPTURED_STATE.lock().unwrap().as_mut() {
+                held.connected = true;
+                if held.counterparty.is_none() {
+                    held.counterparty = state.counterparty;
+                }
+            }
+        }
+    }
+}
+
+/// The live-window facts captured during this recording.
+pub fn captured_state() -> Option<CallWindowState> {
+    CAPTURED_STATE.lock().unwrap().clone()
 }
 
 /// The title captured during this recording, if any.
@@ -337,6 +459,7 @@ pub fn captured_title() -> Option<String> {
 /// for the next.
 pub fn reset() {
     *CAPTURED_TITLE.lock().unwrap() = None;
+    *CAPTURED_STATE.lock().unwrap() = None;
     *BASELINE.lock().unwrap() = None;
 }
 
@@ -368,6 +491,24 @@ pub fn observe(_pid: i32) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn captured_title() -> Option<String> { None }
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Debug, Default)]
+pub struct CallWindowState {
+    pub title: String,
+    pub counterparty: Option<String>,
+    pub connected: bool,
+    pub video: bool,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn observe_connected(_pid: i32) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn captured_state() -> Option<CallWindowState> { None }
+
+#[cfg(not(target_os = "macos"))]
+pub fn observe_connected(_pid: i32) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn reset() {}

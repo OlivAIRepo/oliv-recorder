@@ -400,6 +400,14 @@ fn run<R: Runtime>(app: AppHandle<R>) {
             {
                 if let Some(pid) = crate::audio::call_window::whatsapp_pid() {
                     crate::audio::call_window::observe(pid);
+                    // The window appears while RINGING; keep looking until the
+                    // other side joins, because that transition IS the answer
+                    // and the window dies at hang-up.
+                    crate::audio::call_window::observe_connected(pid);
+                    // The window appears while RINGING, so keep looking until
+                    // the other side joins — that transition is the answer, and
+                    // the window dies at hang-up.
+                    crate::audio::call_window::observe_connected(pid);
                 }
             }
 

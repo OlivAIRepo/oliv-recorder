@@ -401,7 +401,8 @@ async fn end_session() {
     // localized and carry invisible formatting, so the server does the reading —
     // it can be fixed there without shipping a new app.
     #[cfg(target_os = "macos")]
-    let (call_window_title, call_chat_entry) = {
+    let (call_window_title, call_chat_entry, call_connected, call_counterparty) = {
+        let state = crate::audio::call_window::captured_state();
         let title = crate::audio::call_window::captured_title();
         let entry = if title.is_some() {
             // WhatsApp writes the call's chat line when the call ENDS, and the
@@ -414,10 +415,16 @@ async fn end_session() {
         } else {
             None
         };
-        (title, entry)
+        (
+            title,
+            entry,
+            state.as_ref().map(|s| s.connected),
+            state.as_ref().and_then(|s| s.counterparty.clone()),
+        )
     };
     #[cfg(not(target_os = "macos"))]
-    let (call_window_title, call_chat_entry): (Option<String>, Option<String>) = (None, None);
+    let (call_window_title, call_chat_entry, call_connected, call_counterparty):
+        (Option<String>, Option<String>, Option<bool>, Option<String>) = (None, None, None, None);
 
     // Reset source tags so a subsequent manual recording isn't mislabelled.
     *SOURCE_APP.lock().unwrap() = None;
@@ -454,6 +461,16 @@ async fn end_session() {
         "sensitive": sensitive,
         "call_window_title": call_window_title,
         "call_chat_entry": call_chat_entry,
+        // Observed in the LIVE call window, so these beat anything read from the
+        // main window: that one shows whatever the rep last clicked, while the
+        // call window belongs to this call alone.
+        //   connected    — the other side joined, i.e. ANSWERED. The chat text
+        //                  called a plainly-connected call "unanswered".
+        //   counterparty — their own element, not parsed out of the title.
+        // Duration is absent on purpose: the window shows a timer on screen but
+        // does not publish it to the accessibility tree.
+        "call_connected": call_connected,
+        "call_counterparty": call_counterparty,
     });
     if let Err(e) = post_json(&token, "session/end", body).await {
         log::warn!("ingest: {e}");
