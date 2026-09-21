@@ -248,6 +248,16 @@ async fn start_session(meeting_name: Option<String>) {
     }
     let source_app = SOURCE_APP.lock().unwrap().clone();
     let source_app_id = SOURCE_APP_ID.lock().unwrap().clone();
+
+    // Photograph the chat's existing call lines BEFORE we record, so the line
+    // that appears during the call identifies itself by being new. Reading the
+    // chat at the end alone cannot do that: a days-old entry looks exactly like
+    // today's, so a short connected call can pick up the outcome of an older,
+    // unrelated one.
+    #[cfg(target_os = "macos")]
+    if let Some(pid) = crate::audio::call_window::whatsapp_pid() {
+        crate::audio::call_window::snapshot_chat(pid);
+    }
     // Sensitive meeting (mic-only): sent so the API can record it in "Provider
     // metadata". It also explains why the system channel is absent from S3.
     let sensitive = SENSITIVE.load(Ordering::SeqCst);
@@ -383,8 +393,13 @@ async fn end_session() {
     let (call_window_title, call_chat_entry) = {
         let title = crate::audio::call_window::captured_title();
         let entry = if title.is_some() {
+            // WhatsApp writes the call's chat line when the call ENDS, and the
+            // recorder can stop first — the user hangs up, we notice, we stop.
+            // Without a moment's grace the line is not there yet and we would
+            // diff against a chat that has not caught up.
+            std::thread::sleep(std::time::Duration::from_millis(1500));
             crate::audio::call_window::whatsapp_pid()
-                .and_then(crate::audio::call_window::call_chat_entry)
+                .and_then(crate::audio::call_window::new_chat_lines)
         } else {
             None
         };

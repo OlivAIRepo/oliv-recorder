@@ -29,12 +29,13 @@
 #[cfg(target_os = "macos")]
 mod mac {
 
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
-use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
-use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
-use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::array::{CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef};
+use core_foundation::base::{CFGetTypeID, CFRelease, CFRetain, CFTypeRef, TCFType};
+use core_foundation::string::{CFString, CFStringGetTypeID, CFStringRef};
 
 type AXUIElementRef = *const c_void;
 type AXError = i32;
@@ -98,10 +99,18 @@ fn attr_string(element: AXUIElementRef, name: &str) -> Option<String> {
     if err != AX_SUCCESS || value.is_null() {
         return None;
     }
-    // Only interpret it if it really is a CFString; releasing either way.
+    // CHECK the type before casting. One attribute name returns different types
+    // on different elements — `AXValue` is a string on a label but a number, a
+    // boolean or another element elsewhere — and casting one of those to
+    // CFStringRef throws an Objective-C exception, which Rust cannot catch and
+    // which aborts the process ("Rust cannot catch foreign exceptions").
+    let is_string = unsafe { CFGetTypeID(value) == CFStringGetTypeID() };
+    if !is_string {
+        unsafe { CFRelease(value) };
+        return None;
+    }
     let s = unsafe {
-        let cf = value as CFStringRef;
-        let out = CFString::wrap_under_get_rule(cf).to_string();
+        let out = CFString::wrap_under_get_rule(value as CFStringRef).to_string();
         CFRelease(value);
         out
     };
@@ -118,19 +127,35 @@ fn attr_elements(element: AXUIElementRef, name: &str) -> Vec<AXUIElementRef> {
     if err != AX_SUCCESS || value.is_null() {
         return Vec::new();
     }
+    // Same reasoning as `attr_string`: `AXChildren` is an array on most elements
+    // but not on all of them, and treating a non-array as one aborts.
+    if unsafe { CFGetTypeID(value) != CFArrayGetTypeID() } {
+        unsafe { CFRelease(value) };
+        return Vec::new();
+    }
     let array = value as CFArrayRef;
     let count = unsafe { CFArrayGetCount(array) };
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count {
         let item = unsafe { CFArrayGetValueAtIndex(array, i) } as AXUIElementRef;
         if !item.is_null() {
+            // RETAIN each element before dropping the array. The array owns
+            // them, so releasing it can free them — reading one afterwards is a
+            // use-after-free, which macOS ends with SIGTRAP. Ownership passes to
+            // the caller, which must `release_elements` when done.
+            unsafe { CFRetain(item as CFTypeRef) };
             out.push(item);
         }
     }
-    // NOTE: the array is released, its elements are not — they stay valid for
-    // the life of the array's owner, which is what every AX example relies on.
     unsafe { CFRelease(value) };
     out
+}
+
+/// Release elements handed back by `attr_elements`.
+fn release_elements(elements: &[AXUIElementRef]) {
+    for e in elements {
+        unsafe { CFRelease(*e as CFTypeRef) };
+    }
 }
 
 /// True when a window title is WhatsApp's CALL window rather than its main one.
@@ -152,15 +177,24 @@ pub fn call_window_title(pid: i32) -> Option<String> {
     if app.is_null() {
         return None;
     }
-    let found = attr_elements(app, "AXWindows")
-        .into_iter()
-        .filter_map(|w| attr_string(w, "AXTitle"))
+    let windows = attr_elements(app, "AXWindows");
+    let found = windows
+        .iter()
+        .filter_map(|w| attr_string(*w, "AXTitle"))
         .find(|t| is_call_window(t));
+    release_elements(&windows);
     unsafe { CFRelease(app as CFTypeRef) };
     found
 }
 
-/// The most recent call line WhatsApp has written into the open chat.
+/// Call lines WhatsApp has written into the open chat, in tree order.
+///
+/// Returns ALL of them, not the first match: the chat shows history, so the
+/// first call-shaped string is often days old — a 10-second call can read back
+/// as "Outgoing, voice, unanswered, 1 call" against an entry written days
+/// earlier. The server decides which
+/// one (if any) describes the call just recorded, by checking the timestamp each
+/// line carries.
 ///
 /// This IS a tree walk and costs tens of milliseconds, so it runs once when a
 /// recording ends — never on the poll. Bounded hard: a runaway tree must not
@@ -177,11 +211,12 @@ pub fn call_chat_entry(pid: i32) -> Option<String> {
     const MAX_ELEMENTS: usize = 600;
     let mut queue: Vec<AXUIElementRef> = attr_elements(app, "AXWindows");
     let mut seen = 0usize;
-    let mut best: Option<String> = None;
+    let mut found: Vec<String> = Vec::new();
 
     while let Some(element) = queue.pop() {
         seen += 1;
         if seen > MAX_ELEMENTS {
+            unsafe { CFRelease(element as CFTypeRef) };
             break;
         }
         if let Some(value) = attr_string(element, "AXValue") {
@@ -193,15 +228,60 @@ pub fn call_chat_entry(pid: i32) -> Option<String> {
                 && !v.contains("voice message")
                 && !v.contains("voice note");
             if is_call_line {
-                best = Some(value);
-                break;
+                found.push(value);
             }
         }
         queue.extend(attr_elements(element, "AXChildren"));
+        unsafe { CFRelease(element as CFTypeRef) };
     }
 
+    release_elements(&queue);   // whatever the walk did not reach
     unsafe { CFRelease(app as CFTypeRef) };
-    best
+    if found.is_empty() {
+        return None;
+    }
+    Some(found.iter().rev().take(6).cloned().collect::<Vec<_>>().join(" | "))
+}
+
+/// Every call line currently in the chat, as a set. Used as a BEFORE snapshot so
+/// the end-of-call read can report only what appeared while we were recording.
+fn call_lines(pid: i32) -> HashSet<String> {
+    match call_chat_entry(pid) {
+        Some(joined) => joined.split(" | ").map(|s| s.to_string()).collect(),
+        None => HashSet::new(),
+    }
+}
+
+/// Snapshot the chat's existing call lines at the START of a recording.
+///
+/// The chat shows history, so at the end there is no way to tell which line is
+/// this call by reading alone — a five-day-old entry looks the same. Diffing
+/// against this snapshot identifies it by construction: the line that was not
+/// there before is the one that just happened.
+pub fn snapshot_chat(pid: i32) {
+    let lines = call_lines(pid);
+    log::info!("call_window: baseline of {} existing call line(s)", lines.len());
+    *BASELINE.lock().unwrap() = Some(lines);
+}
+
+/// Call lines that appeared since `snapshot_chat` — i.e. this call's.
+///
+/// Falls back to the newest few lines when the diff is empty, so a missed
+/// baseline (app started mid-call, permission granted late) degrades to the old
+/// behaviour rather than losing the entry altogether; the server still checks
+/// the timestamp before believing one.
+pub fn new_chat_lines(pid: i32) -> Option<String> {
+    let current = call_lines(pid);
+    let baseline = BASELINE.lock().unwrap().clone().unwrap_or_default();
+    let mut fresh: Vec<String> = current.difference(&baseline).cloned().collect();
+    if fresh.is_empty() {
+        log::info!("call_window: no new chat line; falling back to recent history");
+        return call_chat_entry(pid);
+    }
+    // Longest first: WhatsApp's completed-call line carries the most detail
+    // ("Voice call , 11 sec, 3:02 AM, Sent to X") while a ring-only line is terse.
+    fresh.sort_by_key(|l| std::cmp::Reverse(l.len()));
+    Some(fresh.join(" | "))
 }
 
 // ---------------------------------------------------------------------------
@@ -212,10 +292,27 @@ pub fn call_chat_entry(pid: i32) -> Option<String> {
 
 static CAPTURED_TITLE: Mutex<Option<String>> = Mutex::new(None);
 
+/// Call lines already in the chat when this recording began.
+static BASELINE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
 /// Called from the mic monitor's poll while a recording is running.
 /// Cheap and idempotent: once a title is held, it does nothing.
 pub fn observe(pid: i32) {
     if CAPTURED_TITLE.lock().unwrap().is_some() {
+        return;
+    }
+    // Say so, once, when the permission is missing. Without this the capture
+    // just returns nothing and looks identical to "no call on screen" — which
+    // cost real debugging time after a re-sign silently dropped the grant.
+    if !is_trusted() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                "call_window: no Accessibility permission — cannot read WhatsApp's \
+                 call window, so an outgoing call has no counterparty"
+            );
+        }
         return;
     }
     if let Some(title) = call_window_title(pid) {
@@ -233,6 +330,7 @@ pub fn captured_title() -> Option<String> {
 /// for the next.
 pub fn reset() {
     *CAPTURED_TITLE.lock().unwrap() = None;
+    *BASELINE.lock().unwrap() = None;
 }
 
 } // mod mac
@@ -266,6 +364,12 @@ pub fn captured_title() -> Option<String> { None }
 
 #[cfg(not(target_os = "macos"))]
 pub fn reset() {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn snapshot_chat(_pid: i32) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn new_chat_lines(_pid: i32) -> Option<String> { None }
 
 #[cfg(not(target_os = "macos"))]
 pub fn request_trust() -> bool { false }
