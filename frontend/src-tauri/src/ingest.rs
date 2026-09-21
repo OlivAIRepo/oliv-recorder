@@ -38,6 +38,17 @@ pub fn oliv_set_sensitive<R: Runtime>(app: AppHandle<R>, sensitive: bool) {
     let _ = app.emit("sensitive-changed", json!({ "sensitive": sensitive }));
 }
 
+/// Whether this build should skip update checks.
+///
+/// A dev build reports the crate's version, which the release feed can beat —
+/// so the updater offers to replace the build under test with production, and
+/// whatever was being tested goes with it. The dev bundles set
+/// OLIV_SKIP_UPDATE=1; release builds do not, so their behaviour is unchanged.
+#[tauri::command]
+pub fn oliv_skip_update_check() -> bool {
+    std::env::var("OLIV_SKIP_UPDATE").map(|v| v == "1").unwrap_or(false)
+}
+
 /// Current value of the sensitive toggle (UI restore on mount).
 #[tauri::command]
 pub fn oliv_get_sensitive() -> bool {

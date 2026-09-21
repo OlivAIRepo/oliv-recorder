@@ -9,6 +9,16 @@ import { UpdateInfo } from '@/services/updateService';
 // Full-screen, non-dismissible gate shown when the running version is below the
 // published minVersion (a required update). Blocks the app until the user
 // installs the update; there is no way to close it.
+/** True when this build has opted out of update checks (dev builds). */
+async function skipUpdateCheck(): Promise<boolean> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('oliv_skip_update_check');
+  } catch {
+    return false;
+  }
+}
+
 export function MandatoryUpdateGate({ updateInfo }: { updateInfo: UpdateInfo | null }) {
   const [isUpdating, setIsUpdating] = useState(false);
   const [percentage, setPercentage] = useState(0);
@@ -21,6 +31,13 @@ export function MandatoryUpdateGate({ updateInfo }: { updateInfo: UpdateInfo | n
     setError(null);
     setPercentage(0);
     try {
+      // A dev build must never be "updated": it reports the crate's version, so
+      // the release feed can look newer and replace the build under test with
+      // production — losing whatever was being tested. Set OLIV_SKIP_UPDATE=1
+      // (the dev bundles do) to opt out.
+      if (await skipUpdateCheck()) {
+        return;
+      }
       const update = await check();
       if (!update?.available) {
         setError('Update is no longer available. Please try again.');
