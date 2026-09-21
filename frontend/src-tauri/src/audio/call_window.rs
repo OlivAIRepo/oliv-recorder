@@ -301,17 +301,24 @@ pub fn observe(pid: i32) {
     if CAPTURED_TITLE.lock().unwrap().is_some() {
         return;
     }
-    // Say so, once, when the permission is missing. Without this the capture
-    // just returns nothing and looks identical to "no call on screen" — which
-    // cost real debugging time after a re-sign silently dropped the grant.
+    // No permission → ASK for it, once per app run, the first time a WhatsApp
+    // call is actually on screen. Asking here rather than at startup means the
+    // prompt arrives when the reason for it is visible, and a user who never
+    // takes WhatsApp calls is never asked at all.
+    //
+    // It also has to be loud in the log: without the permission the capture
+    // returns nothing and looks exactly like "no call on screen", which is how a
+    // silently-dropped grant cost us a debugging session.
     if !is_trusted() {
         use std::sync::atomic::{AtomicBool, Ordering};
-        static WARNED: AtomicBool = AtomicBool::new(false);
-        if !WARNED.swap(true, Ordering::Relaxed) {
+        static ASKED: AtomicBool = AtomicBool::new(false);
+        if !ASKED.swap(true, Ordering::Relaxed) {
             log::warn!(
-                "call_window: no Accessibility permission — cannot read WhatsApp's \
-                 call window, so an outgoing call has no counterparty"
+                "call_window: no Accessibility permission — prompting. Until it is \
+                 granted, an outgoing WhatsApp call has no counterparty and no \
+                 direction, so its recording cannot be logged as a call."
             );
+            request_trust();
         }
         return;
     }
