@@ -392,11 +392,21 @@ fn run<R: Runtime>(app: AppHandle<R>) {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
 
+            let now = detect_all();
+
             // The WhatsApp call window is destroyed the moment the call ends, so
             // its title — the only place the counterparty appears — has to be
             // read while the call is still up. One cheap AX call, and it stops
             // once a title is held.
+            //
+            // Gated on WhatsApp actually HOLDING THE MIC, not merely running:
+            // the first read without the Accessibility permission raises the
+            // system prompt, and a WhatsApp left open in the background is no
+            // reason to ask anyone for it.
             #[cfg(target_os = "macos")]
+            if now
+                .iter()
+                .any(|(_, id)| crate::audio::call_window::is_whatsapp_source(id))
             {
                 if let Some(pid) = crate::audio::call_window::whatsapp_pid() {
                     crate::audio::call_window::observe(pid);
@@ -404,14 +414,8 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                     // other side joins, because that transition IS the answer
                     // and the window dies at hang-up.
                     crate::audio::call_window::observe_connected(pid);
-                    // The window appears while RINGING, so keep looking until
-                    // the other side joins — that transition is the answer, and
-                    // the window dies at hang-up.
-                    crate::audio::call_window::observe_connected(pid);
                 }
             }
-
-            let now = detect_all();
             let appeared: Vec<(String, String)> = now
                 .iter()
                 .filter(|(_, s)| !last.iter().any(|(_, ls)| ls == s))

@@ -26,6 +26,13 @@
 //! Compiles on every platform: the macOS body is gated below and the other
 //! platforms get stubs, so the Tauri command list and the poll need no `cfg`.
 
+/// True when a stable source id is WhatsApp Desktop: the macOS bundle id, or the
+/// Windows exe / package family name. Matching the app name rather than a full
+/// id covers the Store build, whose family name carries a publisher hash.
+pub fn is_whatsapp_source(source_app_id: &str) -> bool {
+    source_app_id.to_lowercase().contains("whatsapp")
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
 
@@ -391,10 +398,10 @@ pub fn observe(pid: i32) {
     if CAPTURED_TITLE.lock().unwrap().is_some() {
         return;
     }
-    // No permission → ASK for it, once per app run, the first time a WhatsApp
-    // call is actually on screen. Asking here rather than at startup means the
-    // prompt arrives when the reason for it is visible, and a user who never
-    // takes WhatsApp calls is never asked at all.
+    // No permission → ASK for it, once per app run. The poll only calls us while
+    // WhatsApp is actually holding the mic, so the prompt arrives when the
+    // reason for it is on screen; a user whose WhatsApp merely sits open, or who
+    // never takes WhatsApp calls, is never asked.
     //
     // It also has to be loud in the log: without the permission the capture
     // returns nothing and looks exactly like "no call on screen", which is how a
@@ -506,9 +513,6 @@ pub fn observe_connected(_pid: i32) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn captured_state() -> Option<CallWindowState> { None }
-
-#[cfg(not(target_os = "macos"))]
-pub fn observe_connected(_pid: i32) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn reset() {}

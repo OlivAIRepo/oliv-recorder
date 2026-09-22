@@ -400,8 +400,23 @@ async fn end_session() {
     // ends); the chat entry outlives the call, so it is read now. Both are
     // localized and carry invisible formatting, so the server does the reading —
     // it can be fixed there without shipping a new app.
+    // Only for a recording whose source app IS WhatsApp. The call window is
+    // watched by the mic poll, which runs whether or not we are recording, so a
+    // call that happened between recordings can leave a title behind — without
+    // this gate that counterparty's name or number would be sent up attached to
+    // the next recording, which may be an unrelated meeting.
     #[cfg(target_os = "macos")]
-    let (call_window_title, call_chat_entry, call_connected, call_counterparty) = {
+    let is_whatsapp_recording = SOURCE_APP_ID
+        .lock()
+        .unwrap()
+        .as_deref()
+        .map(crate::audio::call_window::is_whatsapp_source)
+        .unwrap_or(false);
+
+    #[cfg(target_os = "macos")]
+    let (call_window_title, call_chat_entry, call_connected, call_counterparty) = if !is_whatsapp_recording {
+        (None, None, None, None)
+    } else {
         let state = crate::audio::call_window::captured_state();
         let title = crate::audio::call_window::captured_title();
         let entry = if title.is_some() {
