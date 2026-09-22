@@ -170,8 +170,14 @@ async fn post_json(token: &str, path: &str, body: serde_json::Value) -> Result<(
         .send()
         .await
         .map_err(|e| format!("ingest POST /{path} failed: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("ingest POST /{path} -> HTTP {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        // 401/403 means the middleware rejected our ic_token (evicted/invalidated
+        // server-side) — surface a reconnect prompt instead of silently dropping.
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            crate::auth::notify_auth_lost();
+        }
+        return Err(format!("ingest POST /{path} -> HTTP {status}"));
     }
     Ok(())
 }
@@ -199,6 +205,9 @@ async fn post_json_recv(
         .await
         .map_err(|e| format!("ingest POST /{path} decode failed: {e}"))?;
     if !status.is_success() {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            crate::auth::notify_auth_lost();
+        }
         return Err(format!("ingest POST /{path} -> HTTP {status} ({val})"));
     }
     Ok(val)

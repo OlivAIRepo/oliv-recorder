@@ -18,8 +18,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_notification::NotificationExt;
 
 const ACCOUNT_FILE: &str = "oliv_account.json";
 
@@ -47,6 +49,61 @@ pub fn init_store<R: Runtime>(app: &AppHandle<R>) {
 
 fn account_path() -> Option<PathBuf> {
     ACCOUNT_PATH.get().cloned()
+}
+
+// Concrete app handle used to emit auth events from the background ingest /
+// whitelist paths (which have no AppHandle of their own). Set once at startup.
+static NOTIFY_APP: OnceLock<AppHandle> = OnceLock::new();
+
+// Debounce for `notify_auth_lost`: once we've prompted the user to reconnect, we
+// stay quiet until the next successful login (see `store_account`), so a burst of
+// rejected calls (every segment of a meeting, the 5-min heartbeat) raises exactly
+// one prompt instead of a storm.
+static AUTH_LOST: AtomicBool = AtomicBool::new(false);
+
+/// Remember the app handle so background tasks can emit auth events. Call once
+/// from app setup (concrete `Wry` handle).
+pub fn init_notifier(app: AppHandle) {
+    let _ = NOTIFY_APP.set(app);
+}
+
+/// Called from the ingest / whitelist paths when the middleware rejects our
+/// `ic_token` (HTTP 401/403) — i.e. the token was invalidated/evicted
+/// server-side. Surfaces a non-blocking "reconnect" prompt via `oliv-auth-lost`.
+///
+/// Deliberately does NOT clear the stored account or flip the login gate: doing
+/// so would hide the recording UI if the rejection first lands mid-meeting. Local
+/// recording keeps running; the user reconnects on their own schedule, and the
+/// fresh token from that login (see `handle_auth_callback` → `store_account`)
+/// replaces the dead one and re-arms this notifier. Debounced per login.
+pub fn notify_auth_lost() {
+    if AUTH_LOST.swap(true, Ordering::SeqCst) {
+        return; // already prompted since the last successful login
+    }
+    log::warn!("auth: ic_token rejected by server (401/403) — prompting reconnect");
+    if let Some(app) = NOTIFY_APP.get() {
+        // In-app sticky toast (if a window is open).
+        let _ = app.emit("oliv-auth-lost", ());
+        // Native OS notification — the only signal a background/menubar-only user
+        // reliably sees. Debounced above, so this fires once per lost session.
+        let _ = app
+            .notification()
+            .builder()
+            .title("Oliv — signed out")
+            .body("Your meetings are recording locally but not syncing. Reconnect to Oliv.")
+            .show();
+        // Persistent tray warning + "Reconnect" menu item.
+        crate::tray::refresh_auth_state(app);
+    }
+}
+
+/// Whether we're currently in the "reconnect needed" state. The frontend checks
+/// this on mount because the first rejection can fire ~1s after launch — before
+/// the webview registers its `oliv-auth-lost` listener — so the live event alone
+/// misses the common "token already dead at launch" case.
+#[tauri::command]
+pub fn recorder_auth_lost() -> bool {
+    AUTH_LOST.load(Ordering::SeqCst)
 }
 
 // In-memory cache so the file is read at most once per launch; writes/logout
@@ -108,6 +165,12 @@ fn store_account(acct: &StoredAccount) {
     }
     // Keep the in-memory cache in sync.
     cache_set(Some(acct.clone()));
+    // A fresh token means any prior "reconnect" prompt is resolved; re-arm the
+    // notifier so a future rejection prompts again, and clear the tray warning.
+    AUTH_LOST.store(false, Ordering::SeqCst);
+    if let Some(app) = NOTIFY_APP.get() {
+        crate::tray::refresh_auth_state(app);
+    }
 }
 
 fn read_account() -> Option<StoredAccount> {
