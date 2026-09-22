@@ -77,6 +77,18 @@ export default function SettingsPage() {
   // Using the real check fixes the case where it's granted at the OS level but a
   // stale flag showed "Not granted".
   const [audioGranted, setAudioGranted] = useState(false);
+  // Accessibility: only needed to read WhatsApp's call window, which is the only
+  // way an OUTGOING WhatsApp call can be logged (the server sees no event for
+  // one). Everything else records fine without it, so it is shown as optional.
+  const [accessibilityGranted, setAccessibilityGranted] = useState(false);
+
+  const refreshAccessibility = useCallback(async () => {
+    try {
+      setAccessibilityGranted(await invoke<boolean>('oliv_accessibility_granted'));
+    } catch {
+      /* command unavailable (non-macOS) */
+    }
+  }, []);
 
   const refreshAudioGranted = useCallback(async () => {
     let osGranted = false;
@@ -95,6 +107,10 @@ export default function SettingsPage() {
     }
     setAudioGranted(osGranted || flag);
   }, []);
+
+  useEffect(() => {
+    refreshAccessibility();
+  }, [refreshAccessibility]);
 
   useEffect(() => {
     refreshAudioGranted();
@@ -227,6 +243,7 @@ export default function SettingsPage() {
             <h2 className="text-lg font-semibold text-gray-900">Permissions</h2>
             <p className="mt-1 text-sm text-gray-500">
               Oliv needs microphone and system-audio (screen recording) access to record meetings.
+              Accessibility is optional — it is only used to read who a WhatsApp call is with.
             </p>
             <div className="mt-4 space-y-3">
               {isChecking ? (
@@ -245,6 +262,21 @@ export default function SettingsPage() {
                     label="System audio recording"
                     granted={audioGranted}
                     onGrant={grantSystemAudio}
+                  />
+                  <PermissionRow
+                    label="Accessibility (WhatsApp calls)"
+                    granted={accessibilityGranted}
+                    onGrant={async () => {
+                      await invoke('oliv_request_accessibility').catch(() => {});
+                      // macOS only reports the new state once the user has
+                      // actually ticked us in System Settings, so re-check for a
+                      // while rather than once.
+                      const until = Date.now() + 60_000;
+                      const poll = setInterval(() => {
+                        refreshAccessibility();
+                        if (Date.now() > until) clearInterval(poll);
+                      }, 2000);
+                    }}
                   />
                 </>
               )}

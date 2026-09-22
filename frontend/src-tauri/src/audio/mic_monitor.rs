@@ -216,6 +216,9 @@ fn detect_all() -> Vec<(String, String)> {
             "slack.exe" => Some("Slack"),
             "webex.exe" | "webexmta.exe" | "atmgr.exe" | "ptoneclk.exe" => Some("Webex"),
             "gotomeeting.exe" | "goto.exe" => Some("GoTo Meeting"),
+            // WhatsApp Desktop calls. Usually the Store build (matched as a
+            // package below); this covers the standalone installer.
+            "whatsapp.exe" => Some("WhatsApp"),
             _ => None,
         }
     }
@@ -224,6 +227,11 @@ fn detect_all() -> Vec<(String, String)> {
             Some("Microsoft Teams")
         } else if pfn.contains("zoom") {
             Some("Zoom")
+        } else if pfn.contains("whatsapp") {
+            // e.g. "5319275A.WhatsAppDesktop_cv1g1gvanyjgm" — matched on the app
+            // name rather than the whole family name, which carries a
+            // publisher-specific hash suffix.
+            Some("WhatsApp")
         } else {
             None
         }
@@ -383,7 +391,31 @@ fn run<R: Runtime>(app: AppHandle<R>) {
         let mut last: Vec<(String, String)> = Vec::new();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+
             let now = detect_all();
+
+            // The WhatsApp call window is destroyed the moment the call ends, so
+            // its title — the only place the counterparty appears — has to be
+            // read while the call is still up. One cheap AX call, and it stops
+            // once a title is held.
+            //
+            // Gated on WhatsApp actually HOLDING THE MIC, not merely running:
+            // the first read without the Accessibility permission raises the
+            // system prompt, and a WhatsApp left open in the background is no
+            // reason to ask anyone for it.
+            #[cfg(target_os = "macos")]
+            if now
+                .iter()
+                .any(|(_, id)| crate::audio::call_window::is_whatsapp_source(id))
+            {
+                if let Some(pid) = crate::audio::call_window::whatsapp_pid() {
+                    crate::audio::call_window::observe(pid);
+                    // The window appears while RINGING; keep looking until the
+                    // other side joins, because that transition IS the answer
+                    // and the window dies at hang-up.
+                    crate::audio::call_window::observe_connected(pid);
+                }
+            }
             let appeared: Vec<(String, String)> = now
                 .iter()
                 .filter(|(_, s)| !last.iter().any(|(_, ls)| ls == s))
