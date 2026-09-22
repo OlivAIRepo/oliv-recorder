@@ -500,9 +500,11 @@ async fn end_session() {
         // does not publish it to the accessibility tree.
         "call_connected": call_connected,
         "call_counterparty": call_counterparty,
-        // So `call_chat_entry`'s local clock time can be placed. See
-        // `utc_offset_minutes`.
-        "utc_offset_minutes": utc_offset_minutes(),
+        // Only alongside a chat entry, which is the one thing it places. Every
+        // other field here is already None unless this recording was a WhatsApp
+        // call; an offset is a coarse location signal and there is no reason to
+        // attach one to a meeting recording that has no local-time string in it.
+        "utc_offset_minutes": call_chat_entry.as_ref().map(|_| utc_offset_minutes()),
     });
     if let Err(e) = post_json(&token, "session/end", body).await {
         log::warn!("ingest: {e}");
