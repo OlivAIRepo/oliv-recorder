@@ -55,6 +55,7 @@ pub mod parakeet_engine;
 pub mod state;
 pub mod summary;
 pub mod tray;
+mod update_floor;
 pub mod utils;
 pub mod whisper_engine;
 
@@ -322,16 +323,28 @@ async fn is_recording() -> bool {
     audio::recording_commands::is_recording().await
 }
 
-/// Fetch the minimum-supported version from the latest GitHub release
-/// (`min-version.json`). Fetched in Rust so it isn't subject to the webview CSP.
-/// Returns None on any failure (no release yet, offline, etc.) → never forces.
+/// Fetch the minimum-supported version (`min-version.json`) from the backend.
+/// Fetched in Rust so it isn't subject to the webview CSP.
+///
+/// Served by us rather than read off the GitHub release: a private repo 404s
+/// its release assets to anyone unauthenticated, so an app that asks GitHub
+/// stops learning the floor the moment the repo is closed — and this gate fails
+/// OPEN, so it would go quiet rather than complain.
+///
+/// Returns None on any failure (offline, nothing published yet) → never forces.
 #[tauri::command]
 async fn oliv_min_version() -> Option<String> {
-    let url =
-        "https://github.com/OlivAIRepo/oliv-recorder/releases/latest/download/min-version.json";
+    oliv_min_version_value().await
+}
+
+/// The floor itself, so the Rust-side poller can read it without going through
+/// the webview — see `update_floor`, which is the only thing a menubar-only
+/// user will ever notice.
+pub(crate) async fn oliv_min_version_value() -> Option<String> {
+    let url = format!("{}/api/recorder/min-version.json", crate::ingest::backend_url());
     let resp = reqwest::Client::new()
-        .get(url)
-        .header("User-Agent", "Oliv AI updater")
+        .get(&url)
+        .header("User-Agent", crate::ingest::USER_AGENT)
         .send()
         .await
         .ok()?;
@@ -766,6 +779,10 @@ pub fn run() {
             crate::auth::init_store(&_app.handle());
             // Let background tasks (ingest, whitelist heartbeat) emit auth events.
             crate::auth::init_notifier(_app.handle().clone());
+            // The forced-update floor, checked in Rust as well as the webview:
+            // the in-app gate is invisible to a menubar-only user, so on its own
+            // it leaves old builds running indefinitely.
+            crate::update_floor::start(_app.handle().clone());
 
             // Stream the live transcript (+ audio later) to the recorder ingest.
             crate::ingest::init(&_app.handle());
@@ -830,6 +847,7 @@ pub fn run() {
             oliv_stop_recording,
             close_meeting_prompt,
             oliv_min_version,
+            update_floor::recorder_update_required,
             get_transcription_status,
             read_audio_file,
             save_transcript,
