@@ -161,6 +161,20 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// This machine's current offset from UTC, in minutes (UTC+01:00 = 60).
+///
+/// WhatsApp writes a call's chat line in the user's own local time and prints no
+/// zone marker with it, while every timestamp we send is UTC. Without the offset
+/// that line cannot be placed on a timeline: the same clock time is a different
+/// instant for every user, and nothing in the string says which.
+///
+/// The current offset is the right one because the line is written moments
+/// before we read it — no DST boundary to reason about.
+fn utc_offset_minutes() -> i32 {
+    use chrono::Offset;
+    chrono::Local::now().offset().fix().local_minus_utc() / 60
+}
+
 /// Minimal view of the worker's TranscriptUpdate event payload.
 #[derive(Deserialize)]
 struct TranscriptEvent {
@@ -486,6 +500,11 @@ async fn end_session() {
         // does not publish it to the accessibility tree.
         "call_connected": call_connected,
         "call_counterparty": call_counterparty,
+        // Only alongside a chat entry, which is the one thing it places. Every
+        // other field here is already None unless this recording was a WhatsApp
+        // call; an offset is a coarse location signal and there is no reason to
+        // attach one to a meeting recording that has no local-time string in it.
+        "utc_offset_minutes": call_chat_entry.as_ref().map(|_| utc_offset_minutes()),
     });
     if let Err(e) = post_json(&token, "session/end", body).await {
         log::warn!("ingest: {e}");
