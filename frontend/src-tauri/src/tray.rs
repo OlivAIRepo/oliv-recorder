@@ -273,6 +273,17 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 /// auth-lost / re-login paths (crate::auth). The menu item itself is rendered by
 /// build_menu (which reads the same flag); this just forces an immediate refresh
 /// and updates the tooltip, which set_menu does not touch.
+/// Tray tooltip for the forced-update state. Same reasoning as
+/// `refresh_auth_state`: a background user never opens the window, so the tray
+/// is one of the few places they will actually see this.
+pub fn refresh_update_state<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        if crate::update_floor::recorder_update_required() {
+            let _ = tray.set_tooltip(Some("Oliv AI — update required; open Oliv to update"));
+        }
+    }
+}
+
 pub fn refresh_auth_state<R: Runtime>(app: &AppHandle<R>) {
     if let Some(tray) = app.tray_by_id("main-tray") {
         let tooltip = if crate::auth::recorder_auth_lost() {
